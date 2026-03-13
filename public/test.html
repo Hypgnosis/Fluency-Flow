@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>FluencyFlow - Audio Diagnostic</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        button {
+            padding: 14px 28px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 8px;
+            border: none;
+            margin: 5px;
+            font-weight: bold;
+        }
+
+        .start {
+            background: #06b6d4;
+            color: white;
+        }
+
+        .start:disabled {
+            background: #334155;
+            color: #64748b;
+            cursor: not-allowed;
+        }
+
+        .stop {
+            background: #f43f5e;
+            color: white;
+        }
+
+        .stop:disabled {
+            background: #334155;
+            color: #64748b;
+            cursor: not-allowed;
+        }
+
+        #log {
+            white-space: pre-wrap;
+            font-size: 12px;
+            line-height: 1.8;
+            max-height: 500px;
+            overflow-y: auto;
+            background: #1e293b;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 16px;
+            border: 1px solid #334155;
+        }
+
+        .ok {
+            color: #4ade80;
+        }
+
+        .err {
+            color: #fb7185;
+        }
+
+        .info {
+            color: #38bdf8;
+        }
+
+        .warn {
+            color: #fbbf24;
+        }
+
+        h1 {
+            color: #06b6d4;
+            margin-bottom: 8px;
+            font-size: 24px;
+        }
+
+        p.desc {
+            color: #94a3b8;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+
+        #status {
+            padding: 8px 16px;
+            border-radius: 20px;
+            display: inline-block;
+            font-weight: bold;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+
+        .counters {
+            display: flex;
+            gap: 12px;
+            margin: 12px 0;
+            flex-wrap: wrap;
+        }
+
+        .counter {
+            background: #1e293b;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            border: 1px solid #334155;
+        }
+
+        .counter b {
+            font-size: 18px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🎤 FluencyFlow Audio Diagnostic</h1>
+        <p class="desc">Direct WebSocket test to Gemini Live API. No React, no SDK, no imports. Click Start, allow mic,
+            speak.</p>
+        <div>
+            <button class="start" id="startBtn">▶ Start Test</button>
+            <button class="stop" id="stopBtn" disabled>■ Stop</button>
+        </div>
+        <div id="status" style="background: #334155">IDLE</div>
+        <div class="counters">
+            <div class="counter">📩 WS Msgs: <b id="cMsg">0</b></div>
+            <div class="counter">🔊 Audio Out: <b id="cAudio">0</b></div>
+            <div class="counter">📝 Transcripts: <b id="cTrans">0</b></div>
+            <div class="counter">📤 Audio Sent: <b id="cSent">0</b></div>
+        </div>
+        <div id="log"></div>
+    </div>
+
+    <script>
+        // ===== COMPLETELY SELF-CONTAINED — NO IMPORTS =====
+        var API_KEY = 'YOUR_API_KEY_HERE'; // TODO: Replace with your actual key to test
+        var MODEL = 'gemini-2.5-flash-native-audio-preview-12-2025';
+        var API_VERSION = 'v1beta';
+
+        var ws = null;
+        var mediaStream = null;
+        var audioCtxIn = null;
+        var audioCtxOut = null;
+        var processor = null;
+        var nextStartTime = 0;
+        var cMsg = 0, cAudio = 0, cTrans = 0, cSent = 0;
+
+        function log(msg, cls) {
+            var el = document.getElementById('log');
+            var t = new Date().toLocaleTimeString();
+            el.innerHTML += '<span class="' + (cls || '') + '">[' + t + '] ' + msg + '</span>\n';
+            el.scrollTop = el.scrollHeight;
+            console.log('[Test] ' + msg);
+        }
+
+        function setStatus(text, color) {
+            var el = document.getElementById('status');
+            el.textContent = text;
+            el.style.background = color;
+        }
+
+        function updateUI() {
+            document.getElementById('cMsg').textContent = cMsg;
+            document.getElementById('cAudio').textContent = cAudio;
+            document.getElementById('cTrans').textContent = cTrans;
+            document.getElementById('cSent').textContent = cSent;
+        }
+
+        // Base64 helpers
+        function toBase64(uint8arr) {
+            var binary = '';
+            for (var i = 0; i < uint8arr.length; i++) {
+                binary += String.fromCharCode(uint8arr[i]);
+            }
+            return btoa(binary);
+        }
+
+        function fromBase64(b64) {
+            var binary = atob(b64);
+            var bytes = new Uint8Array(binary.length);
+            for (var i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        // Convert Float32 audio to 16-bit PCM at 16kHz, return base64
+        function encodeAudio(float32, srcRate) {
+            var ratio = srcRate / 16000;
+            var newLen = Math.ceil(float32.length / ratio);
+            var int16 = new Int16Array(newLen);
+            for (var i = 0; i < newLen; i++) {
+                var idx = Math.floor(i * ratio);
+                var s = Math.max(-1, Math.min(1, float32[idx] || 0));
+                int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            return toBase64(new Uint8Array(int16.buffer));
+        }
+
+        document.getElementById('startBtn').addEventListener('click', function () {
+            startTest();
+        });
+        document.getElementById('stopBtn').addEventListener('click', function () {
+            stopTest();
+        });
+
+        async function startTest() {
+            if (API_KEY === 'YOUR_API_KEY_HERE') {
+                alert('Please open public/test.html in a text editor and set your API_KEY directly in the code to test.');
+                return;
+            }
+            log('=== Starting Audio Diagnostic ===', 'info');
+            setStatus('CONNECTING...', '#ca8a04');
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            cMsg = 0; cAudio = 0; cTrans = 0; cSent = 0;
+            updateUI();
+
+            try {
+                // Step 1: Get microphone
+                log('1. Requesting microphone access...', 'info');
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('   ✅ Microphone granted!', 'ok');
+
+                // Step 2: Audio contexts
+                audioCtxIn = new (window.AudioContext || window.webkitAudioContext)();
+                audioCtxOut = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+                await audioCtxIn.resume();
+                await audioCtxOut.resume();
+                log('2. ✅ AudioContexts: in=' + audioCtxIn.sampleRate + 'Hz (' + audioCtxIn.state + '), out=' + audioCtxOut.sampleRate + 'Hz (' + audioCtxOut.state + ')', 'ok');
+
+                // Step 3: Open WebSocket to Gemini Live API directly
+                var wsUrl = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.' + API_VERSION + '.GenerativeService.BidiGenerateContent?key=' + API_KEY;
+                log('3. Opening WebSocket to Gemini...', 'info');
+                log('   URL: ...generativelanguage.googleapis.com/ws/...BidiGenerateContent', 'info');
+
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function () {
+                    log('   ✅ WebSocket OPEN!', 'ok');
+
+                    // Send setup message
+                    var setup = {
+                        setup: {
+                            model: 'models/' + MODEL,
+                            generationConfig: {
+                                responseModalities: ['AUDIO'],
+                            },
+                            systemInstruction: {
+                                parts: [{ text: 'You are a friendly language tutor. Greet the user briefly and ask how you can help.' }]
+                            },
+                            inputAudioTranscription: {},
+                            outputAudioTranscription: {},
+                        }
+                    };
+                    ws.send(JSON.stringify(setup));
+                    log('   📤 Sent setup message', 'info');
+                };
+
+                ws.onmessage = async function (event) {
+                    cMsg++;
+                    updateUI();
+
+                    var data;
+                    if (typeof event.data === 'string') {
+                        data = JSON.parse(event.data);
+                    } else if (event.data instanceof Blob) {
+                        var text = await event.data.text();
+                        data = JSON.parse(text);
+                    } else {
+                        log('   ⚠️ Unknown message type: ' + typeof event.data, 'warn');
+                        return;
+                    }
+
+                    var keys = Object.keys(data);
+
+                    // Setup complete
+                    if (data.setupComplete !== undefined) {
+                        log('   ✅ [msg #' + cMsg + '] Setup complete — ready!', 'ok');
+                        setStatus('CONNECTED ● SPEAK NOW', '#059669');
+                        startMicStreaming();
+                        return;
+                    }
+
+                    // Server content
+                    if (data.serverContent) {
+                        var sc = data.serverContent;
+
+                        // Input transcription
+                        if (sc.inputTranscription && sc.inputTranscription.text) {
+                            cTrans++;
+                            updateUI();
+                            log('   🎤 YOU: "' + sc.inputTranscription.text + '"', 'warn');
+                        }
+
+                        // Output transcription
+                        if (sc.outputTranscription && sc.outputTranscription.text) {
+                            cTrans++;
+                            updateUI();
+                            log('   🤖 AI: "' + sc.outputTranscription.text + '"', 'ok');
+                        }
+
+                        // Model audio output
+                        if (sc.modelTurn && sc.modelTurn.parts) {
+                            for (var p = 0; p < sc.modelTurn.parts.length; p++) {
+                                var part = sc.modelTurn.parts[p];
+                                if (part && part.inlineData && part.inlineData.data) {
+                                    try {
+                                        if (audioCtxOut.state === 'suspended') await audioCtxOut.resume();
+                                        var raw = fromBase64(part.inlineData.data);
+                                        var int16 = new Int16Array(raw.buffer);
+                                        var buf = audioCtxOut.createBuffer(1, int16.length, 24000);
+                                        var ch = buf.getChannelData(0);
+                                        for (var j = 0; j < int16.length; j++) ch[j] = int16[j] / 32768.0;
+
+                                        var now = audioCtxOut.currentTime;
+                                        nextStartTime = Math.max(nextStartTime, now);
+                                        var src = audioCtxOut.createBufferSource();
+                                        src.buffer = buf;
+                                        src.connect(audioCtxOut.destination);
+                                        src.start(nextStartTime);
+                                        nextStartTime += buf.duration;
+
+                                        cAudio++;
+                                        updateUI();
+                                    } catch (e) {
+                                        log('   ❌ Audio play error: ' + e.message, 'err');
+                                    }
+                                }
+                            }
+                        }
+
+                        // Turn complete
+                        if (sc.turnComplete) {
+                            log('   ✅ [msg #' + cMsg + '] Turn complete', 'ok');
+                        }
+
+                        // Interrupted
+                        if (sc.interrupted) {
+                            log('   ⚠️ Interrupted', 'warn');
+                        }
+                    } else {
+                        log('   📩 [msg #' + cMsg + '] keys: ' + keys.join(', '), 'info');
+                    }
+                };
+
+                ws.onerror = function (e) {
+                    log('   ❌ WebSocket ERROR: ' + (e.message || 'see browser console'), 'err');
+                    setStatus('ERROR', '#dc2626');
+                };
+
+                ws.onclose = function (e) {
+                    log('   🔌 WebSocket CLOSED: code=' + e.code + ' reason="' + (e.reason || '') + '"', e.code === 1000 ? 'info' : 'err');
+                    setStatus('DISCONNECTED', '#475569');
+                };
+
+            } catch (err) {
+                log('❌ FATAL: ' + err.message, 'err');
+                log('   ' + err.stack, 'err');
+                setStatus('ERROR', '#dc2626');
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            }
+        }
+
+        function startMicStreaming() {
+            log('4. Starting microphone streaming...', 'info');
+            try {
+                var source = audioCtxIn.createMediaStreamSource(mediaStream);
+                processor = audioCtxIn.createScriptProcessor(4096, 1, 1);
+
+                processor.onaudioprocess = function (event) {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+                    var floatData = event.inputBuffer.getChannelData(0);
+                    var b64 = encodeAudio(floatData, audioCtxIn.sampleRate);
+
+                    var msg = {
+                        realtimeInput: {
+                            mediaChunks: [{
+                                data: b64,
+                                mimeType: 'audio/pcm;rate=16000'
+                            }]
+                        }
+                    };
+
+                    try {
+                        ws.send(JSON.stringify(msg));
+                        cSent++;
+                        if (cSent % 25 === 0) {
+                            updateUI();
+                            if (cSent === 25) log('   📤 Sending audio... (' + cSent + ' chunks sent)', 'info');
+                        }
+                    } catch (e) {
+                        if (cSent === 0) log('   ❌ Send failed: ' + e.message, 'err');
+                    }
+                };
+
+                source.connect(processor);
+                var gain = audioCtxIn.createGain();
+                gain.gain.value = 0;
+                processor.connect(gain);
+                gain.connect(audioCtxIn.destination);
+
+                log('   ✅ Mic streaming! Speak now...', 'ok');
+            } catch (e) {
+                log('   ❌ Mic streaming setup failed: ' + e.message, 'err');
+            }
+        }
+
+        function stopTest() {
+            log('Stopping...', 'warn');
+            try { if (processor) processor.disconnect(); } catch (e) { }
+            try { if (mediaStream) mediaStream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
+            try { if (audioCtxIn) audioCtxIn.close(); } catch (e) { }
+            try { if (audioCtxOut) audioCtxOut.close(); } catch (e) { }
+            try { if (ws) ws.close(); } catch (e) { }
+            ws = null; mediaStream = null; audioCtxIn = null; audioCtxOut = null; processor = null;
+            nextStartTime = 0;
+            setStatus('STOPPED', '#475569');
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            log('Stopped.', 'warn');
+        }
+
+        log('✅ Page loaded. Ready to test.', 'ok');
+        log('Model: ' + MODEL, 'info');
+        log('Click "Start Test" to begin.', 'info');
+    </script>
+</body>
+
+</html>

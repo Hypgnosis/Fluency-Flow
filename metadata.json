@@ -1,0 +1,7 @@
+{
+  "name": "FluencyFlow: AI Language Tutor",
+  "description": "Have real-time spoken conversations with an AI language tutor. Practice your pronunciation and get instant feedback with Gemini's Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
