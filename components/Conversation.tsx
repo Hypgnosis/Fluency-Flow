@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, Suspense, lazy } from 'react';
 import { startLiveSession, createBlob } from '../services/geminiService';
 import { decode, decodeAudioData, encodeWAV } from '../utils/audioUtils';
 import { TranscriptionEntry, VocabularyCard } from '../types';
@@ -14,6 +14,8 @@ import { VocabularyCardDisplay, VocabularyCollection } from './VocabularyCard';
 import { analyzeImageForVocabulary } from '../services/visionService';
 import { shouldGenerateImage, generateSceneImage } from '../services/imageGenerationService';
 import { SceneImage, SceneImageSkeleton } from './SceneImage';
+
+const GlossosOrb = lazy(() => import('./GlossosOrb'));
 
 
 type ConnectionState = 'IDLE' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR';
@@ -798,119 +800,89 @@ const Conversation: React.FC = () => {
                         ref={logContainerRef}
                         className="flex-grow overflow-y-auto p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8"
                     >
-                        {/* Context-Aware Empty State */}
+                        {/* Context-Aware Empty State with 3D Orb */}
                         {transcriptionLog.length === 0 && (
-                            <div className="h-full flex flex-col items-center justify-center text-center select-none px-4">
-                                {connectionState === 'CONNECTING' ? (
-                                    /* Connecting State */
-                                    <div className="animate-fade-in">
-                                        <div className="relative mb-8">
-                                            <div className="w-24 h-24 sm:w-28 sm:h-28 mx-auto rounded-full border-[3px] border-cyan-500/20 border-t-cyan-400 animate-spin" style={{ animationDuration: '1.5s' }}></div>
-                                            <div className="absolute inset-0 flex items-center justify-center">
-                                                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-gradient-to-br from-cyan-500/10 to-indigo-500/10 flex items-center justify-center">
-                                                    <svg className="w-8 h-8 sm:w-10 sm:h-10 text-cyan-400/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                                    </svg>
-                                                </div>
-                                            </div>
+                            <div className="h-full flex flex-col items-center justify-center text-center select-none px-4 relative">
+                                {/* 3D Orb Background */}
+                                <div className="absolute inset-0 z-0">
+                                    <Suspense fallback={
+                                        <div className="w-full h-full flex items-center justify-center">
+                                            <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#FFBF00]/10 to-[#00FF41]/10 animate-breathe" />
                                         </div>
-                                        <h2 className="text-white text-xl sm:text-2xl font-bold tracking-tight mb-2">
-                                            Connecting to AI Tutor...
-                                        </h2>
-                                        <p className="text-slate-500 text-sm font-medium max-w-xs leading-relaxed">
-                                            Setting up your real-time audio session. This usually takes a few seconds.
-                                        </p>
-                                    </div>
-                                ) : connectionState === 'CONNECTED' ? (
-                                    /* Connected — Waiting for speech */
-                                    <div className="animate-fade-in pointer-events-none">
-                                        <div className="relative animate-float mb-8">
-                                            <div className="absolute -inset-8 bg-gradient-to-r from-emerald-500/10 via-cyan-500/10 to-blue-500/10 rounded-full blur-2xl"></div>
-                                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-gradient-to-br from-emerald-500/10 to-cyan-500/10 border border-emerald-500/20 flex items-center justify-center overflow-hidden">
-                                                <div className="flex items-center gap-1">
-                                                    {[...Array(5)].map((_, i) => (
-                                                        <div key={i} className="sound-wave-bar" style={{ height: '16px', opacity: 0.5 }} />
-                                                    ))}
-                                                </div>
-                                            </div>
+                                    }>
+                                        <GlossosOrb connectionState={connectionState} volume={volume} />
+                                    </Suspense>
+                                </div>
+
+                                {/* Text Overlay */}
+                                <div className="relative z-10 mt-auto mb-8 sm:mb-12 pointer-events-none">
+                                    {connectionState === 'CONNECTING' ? (
+                                        <div className="animate-fade-in">
+                                            <h2 className="text-[#FFBF00] text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
+                                                Initializing Neural Link...
+                                            </h2>
+                                            <p className="text-slate-500 text-sm font-medium max-w-xs mx-auto leading-relaxed" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                                                Setting up your real-time audio session
+                                            </p>
                                         </div>
-                                        <h2 className="text-[#00FF41] text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
-                                            Neural Sync Active
-                                        </h2>
-                                        <p className="text-slate-400 text-sm font-medium max-w-sm leading-relaxed mb-4" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                                            {proficiencyLevel === 'Advanced'
-                                                ? 'SYSTEM ALERT: Full Immersion Engaged. Linguistic assistance is deprecated. Entering dialectical mastery.'
-                                                : proficiencyLevel === 'Intermediate'
-                                                    ? 'Engaging fluidity protocols. Focus on conversational cadence.'
-                                                    : 'Initialize structural acquisition. GLOSSOS is monitoring syntax.'
-                                            }
-                                        </p>
-                                        <div className="flex flex-col gap-2 text-xs text-slate-500">
-                                            <div className="flex items-center gap-2 justify-center">
+                                    ) : connectionState === 'CONNECTED' ? (
+                                        <div className="animate-fade-in">
+                                            <h2 className="text-[#00FF41] text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
+                                                Neural Sync Active
+                                            </h2>
+                                            <p className="text-slate-400 text-sm font-medium max-w-sm mx-auto leading-relaxed mb-3" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                                                {proficiencyLevel === 'Advanced'
+                                                    ? 'Full Immersion Engaged. Entering dialectical mastery.'
+                                                    : proficiencyLevel === 'Intermediate'
+                                                        ? 'Engaging fluidity protocols. Focus on conversational cadence.'
+                                                        : 'Initialize structural acquisition. GLOSSOS is monitoring syntax.'
+                                                }
+                                            </p>
+                                            <div className="flex items-center gap-2 justify-center text-xs text-slate-500">
                                                 <span className="text-[#00FF41]">◉</span>
                                                 <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>Speak in <em className="text-[#FFBF00]">{selectedLanguage}</em> to begin</span>
                                             </div>
                                         </div>
-                                    </div>
-                                ) : connectionState === 'ERROR' ? (
-                                    /* Error State */
-                                    <div className="animate-fade-in">
-                                        <div className="relative mb-8">
-                                            <div className="absolute -inset-6 bg-rose-500/10 rounded-full blur-2xl"></div>
-                                            <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-gradient-to-br from-rose-500/10 to-red-500/10 border border-rose-500/20 flex items-center justify-center">
-                                                <svg className="w-12 h-12 text-rose-400/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                                    ) : connectionState === 'ERROR' ? (
+                                        <div className="animate-fade-in">
+                                            <h2 className="text-rose-400 text-xl font-bold tracking-tight mb-2">
+                                                Connection Issue
+                                            </h2>
+                                            <p className="text-slate-500 text-sm font-medium max-w-sm mx-auto leading-relaxed">
+                                                Tap the microphone to try again
+                                            </p>
+                                        </div>
+                                    ) : (
+                                        <div className="animate-fade-in">
+                                            <h2 className="text-white text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
+                                                Awaiting Neural Sync
+                                            </h2>
+                                            <p className="text-slate-500 text-sm sm:text-base font-medium max-w-sm mx-auto leading-relaxed mb-5" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                                                Initialize a linguistic sync to begin cognitive acquisition
+                                            </p>
+                                            <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-6 text-xs text-slate-600 pointer-events-auto">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">1</div>
+                                                    <span className="font-medium">Initialize</span>
+                                                </div>
+                                                <svg className="w-3 h-3 text-slate-700 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                                 </svg>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">2</div>
+                                                    <span className="font-medium">Transmit</span>
+                                                </div>
+                                                <svg className="w-3 h-3 text-slate-700 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                                </svg>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">3</div>
+                                                    <span className="font-medium">Neural analysis</span>
+                                                </div>
                                             </div>
                                         </div>
-                                        <h2 className="text-rose-400 text-xl font-bold tracking-tight mb-2">
-                                            Connection Issue
-                                        </h2>
-                                        <p className="text-slate-500 text-sm font-medium max-w-sm leading-relaxed mb-4">
-                                            Tap the microphone to try again
-                                        </p>
-                                    </div>
-                                ) : (
-                                    /* Idle — Onboarding */
-                                    <div className="pointer-events-none">
-                                        {/* Floating Mic Icon */}
-                                        <div className="relative animate-float mb-8">
-                                            <div className="absolute -inset-6 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-indigo-500/10 rounded-full blur-2xl"></div>
-                                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-gradient-to-b from-white/[0.06] to-transparent border border-white/[0.08] flex items-center justify-center overflow-hidden">
-                                                <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/5 to-indigo-500/5"></div>
-                                                <MicrophoneIcon className="w-10 h-10 sm:w-12 sm:h-12 text-cyan-400/60 relative z-10" />
-                                            </div>
-                                        </div>
-                                        <h2 className="text-white text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
-                                            Awaiting Neural Sync
-                                        </h2>
-                                        <p className="text-slate-500 text-sm sm:text-base font-medium max-w-sm leading-relaxed mb-5" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                                            Initialize a linguistic sync to begin cognitive acquisition
-                                        </p>
-
-                                        {/* How It Works Steps */}
-                                        <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-6 text-xs text-slate-600">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">1</div>
-                                                <span className="font-medium">Initialize</span>
-                                            </div>
-                                            <svg className="w-3 h-3 text-slate-700 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                            </svg>
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">2</div>
-                                                <span className="font-medium">Transmit</span>
-                                            </div>
-                                            <svg className="w-3 h-3 text-slate-700 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                            </svg>
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">3</div>
-                                                <span className="font-medium">Neural analysis</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
+                                    )}
+                                </div>
                             </div>
                         )}
 

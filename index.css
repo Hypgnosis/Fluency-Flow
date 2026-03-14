@@ -360,3 +360,20 @@ h1, h2, .heading-tight {
 .neural-amber { color: var(--sacred-amber); }
 .bg-terminal-green { background-color: var(--terminal-green); }
 .bg-sacred-amber { background-color: var(--sacred-amber); }
+
+/* ========================================================
+   3D Orb Container
+   ======================================================== */
+
+.glossos-orb-container {
+    width: 100%;
+    height: 100%;
+    min-height: 280px;
+    position: relative;
+}
+
+.glossos-orb-container canvas {
+    width: 100% !important;
+    height: 100% !important;
+    touch-action: none;
+}
