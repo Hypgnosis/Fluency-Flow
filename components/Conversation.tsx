@@ -19,8 +19,25 @@ import { SceneImage, SceneImageSkeleton } from './SceneImage';
 type ConnectionState = 'IDLE' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR';
 
 const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Portuguese', 'Korean', 'Chinese', 'Russian', 'Slovak', 'Yucatec Mayan'];
-const PROFICIENCY_LEVELS = ['Beginner', 'Intermediate', 'Advanced'];
+const PROFICIENCY_LEVELS = [
+    { value: 'Beginner', label: 'The Foundation' },
+    { value: 'Intermediate', label: 'The Bridge' },
+    { value: 'Advanced', label: 'The Pantheon' },
+];
 const VOICES = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'];
+
+// Level theme mapping
+const LEVEL_THEMES: Record<string, string> = {
+    'Beginner': 'theme-foundation',
+    'Intermediate': 'theme-bridge',
+    'Advanced': 'theme-pantheon',
+};
+
+const LEVEL_COLORS: Record<string, { accent: string; glow: string; text: string }> = {
+    'Beginner': { accent: '#F5F5F7', glow: 'from-[#F5F5F7]/10 via-transparent to-transparent', text: 'text-[#F5F5F7]' },
+    'Intermediate': { accent: '#00FF41', glow: 'from-[#00FF41]/10 via-transparent to-transparent', text: 'text-[#00FF41]' },
+    'Advanced': { accent: '#FFBF00', glow: 'from-[#FFBF00]/15 via-transparent to-transparent', text: 'text-[#FFBF00]' },
+};
 
 const Conversation: React.FC = () => {
     const { user } = useAuth();
@@ -230,7 +247,7 @@ const Conversation: React.FC = () => {
         try {
             // Log all messages for debugging
             const msgKeys = Object.keys(message);
-            console.log('[FluencyFlow] Message received:', msgKeys.join(', '), message);
+            console.log('[GLOSSOS] Message received:', msgKeys.join(', '), message);
             // Don't flood the UI log with every message, just non-content ones or errors
             if (!message.serverContent) {
                 addDebugLog(`Msg: ${msgKeys.join(', ')}`);
@@ -244,7 +261,7 @@ const Conversation: React.FC = () => {
             // Handle setup complete
             if ((message as any).setupComplete) {
                 addDebugLog('Setup Complete! Session Ready');
-                console.log('[FluencyFlow] ✅ Setup complete — session is ready');
+                console.log('[GLOSSOS] ✅ Setup complete — session is ready');
                 return;
             }
 
@@ -257,7 +274,7 @@ const Conversation: React.FC = () => {
 
                 if (message.serverContent.inputTranscription) {
                     const { text } = message.serverContent.inputTranscription;
-                    console.log('[FluencyFlow] 🎤 Input transcription:', text);
+                    console.log('[GLOSSOS] 🎤 Input transcription:', text);
                     setTranscriptionLog(prev => {
                         const existingEntryIndex = prev.findIndex(e => e.id === currentInputTranscriptionRef.current.id);
                         if (existingEntryIndex === -1 && text) {
@@ -276,7 +293,7 @@ const Conversation: React.FC = () => {
 
                 if (message.serverContent.outputTranscription) {
                     const { text } = message.serverContent.outputTranscription;
-                    console.log('[FluencyFlow] 🤖 Output transcription:', text);
+                    console.log('[GLOSSOS] 🤖 Output transcription:', text);
                     setTranscriptionLog(prev => {
                         const existingEntryIndex = prev.findIndex(e => e.id === currentOutputTranscriptionRef.current.id);
                         if (existingEntryIndex === -1 && text) {
@@ -295,7 +312,7 @@ const Conversation: React.FC = () => {
                 }
 
                 if (message.serverContent.turnComplete) {
-                    console.log('[FluencyFlow] ✅ Turn complete');
+                    console.log('[GLOSSOS] ✅ Turn complete');
                     const inputId = currentInputTranscriptionRef.current.id;
                     const outputId = currentOutputTranscriptionRef.current.id;
                     // Cast turnComplete to any to access runtime properties
@@ -359,7 +376,7 @@ const Conversation: React.FC = () => {
                             try {
                                 // Ensure AudioContext is in 'running' state (browsers can auto-suspend)
                                 if (outputAudioContextRef.current.state === 'suspended') {
-                                    console.log('[FluencyFlow] ⚠️ AudioContext suspended, resuming...');
+                                    console.log('[GLOSSOS] ⚠️ AudioContext suspended, resuming...');
                                     await outputAudioContextRef.current.resume();
                                 }
 
@@ -382,21 +399,21 @@ const Conversation: React.FC = () => {
                                 setAudioChunkCount(prev => prev + 1);
                                 outputSourcesRef.current.add(source);
                             } catch (audioErr) {
-                                console.error('[FluencyFlow] Audio playback error:', audioErr);
+                                console.error('[GLOSSOS] Audio playback error:', audioErr);
                             }
                         }
                     }
                 }
 
                 if (message.serverContent?.interrupted) {
-                    console.log('[FluencyFlow] ⚠️ Interrupted');
+                    console.log('[GLOSSOS] ⚠️ Interrupted');
                     outputSourcesRef.current.forEach(source => source.stop());
                     outputSourcesRef.current.clear();
                     nextStartTimeRef.current = 0;
                 }
             }
         } catch (msgErr) {
-            console.error('[FluencyFlow] Error handling server message:', msgErr);
+            console.error('[GLOSSOS] Error handling server message:', msgErr);
         }
     }, [addDebugLog, handleGenerateSceneImage]);
 
@@ -477,10 +494,10 @@ const Conversation: React.FC = () => {
                         try {
                             session.sendRealtimeInput({ media: pcmBlob });
                         } catch (sendErr) {
-                            console.error('[FluencyFlow] Error sending audio:', sendErr);
+                            console.error('[GLOSSOS] Error sending audio:', sendErr);
                         }
                     }).catch((sessionErr) => {
-                        console.error('[FluencyFlow] Session promise rejected:', sessionErr);
+                        console.error('[GLOSSOS] Session promise rejected:', sessionErr);
                     });
                 }
             };
@@ -496,9 +513,9 @@ const Conversation: React.FC = () => {
             sessionPromiseRef.current = startLiveSession({
                 onOpen: () => {
                     addDebugLog('WebSocket OPEN');
-                    console.log('[FluencyFlow] ✅ WebSocket onOpen fired');
-                    console.log('[FluencyFlow] Input AudioContext state:', inputAudioContextRef.current?.state);
-                    console.log('[FluencyFlow] Output AudioContext state:', outputAudioContextRef.current?.state);
+                    console.log('[GLOSSOS] ✅ WebSocket onOpen fired');
+                    console.log('[GLOSSOS] Input AudioContext state:', inputAudioContextRef.current?.state);
+                    console.log('[GLOSSOS] Output AudioContext state:', outputAudioContextRef.current?.state);
                     setConnectionState('CONNECTED');
                     // Set a timeout — if no AI response within 15s of CONNECTED, show a hint
                     connectionTimeoutRef.current = setTimeout(() => {
@@ -594,7 +611,7 @@ const Conversation: React.FC = () => {
     }, [isConversationActive, isVisionMode]);
 
     return (
-        <div className="relative flex flex-col h-full w-full mx-auto animate-fade-in">
+        <div className={`relative flex flex-col h-full w-full mx-auto animate-fade-in ${LEVEL_THEMES[proficiencyLevel] || ''}`}>
 
             {/* Glass Container */}
             <div className="flex flex-col flex-grow glass-card shadow-2xl shadow-black/40 overflow-hidden ring-1 ring-white/[0.06]">
@@ -604,16 +621,13 @@ const Conversation: React.FC = () => {
                     <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
                         {/* Dynamic Status Indicator */}
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/20 border border-white/[0.06]">
-                            <div className={`w-2 h-2 rounded-full transition-all duration-500 ${connectionState === 'CONNECTED' ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.7)]' :
-                                connectionState === 'CONNECTING' ? 'bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.4)]' :
+                            <div className={`w-2 h-2 rounded-full transition-all duration-500 ${connectionState === 'CONNECTED' ? 'bg-[#00FF41] shadow-[0_0_12px_rgba(0,255,65,0.7)]' :
+                                connectionState === 'CONNECTING' ? 'bg-[#FFBF00] animate-pulse shadow-[0_0_8px_rgba(255,191,0,0.4)]' :
                                     connectionState === 'ERROR' ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.4)]' :
                                         'bg-slate-600'
                                 }`}></div>
-                            <span className={`text-[10px] font-bold tracking-[0.15em] uppercase transition-colors ${connectionState === 'CONNECTED' ? 'text-emerald-400' :
-                                connectionState === 'CONNECTING' ? 'text-amber-400' :
-                                    connectionState === 'ERROR' ? 'text-rose-400' : 'text-slate-500'
-                                }`}>
-                                {connectionState === 'IDLE' ? 'Ready' : connectionState === 'CONNECTING' ? 'Connecting' : connectionState === 'CONNECTED' ? 'Live' : connectionState}
+                            <span className={`text-[10px] font-bold tracking-[0.15em] uppercase transition-colors`} style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                                {connectionState === 'IDLE' ? 'Standby' : connectionState === 'CONNECTING' ? 'Initializing' : connectionState === 'CONNECTED' ? 'Synced' : connectionState}
                             </span>
                         </div>
 
@@ -624,10 +638,11 @@ const Conversation: React.FC = () => {
                                 onClick={toggleVisionMode}
                                 disabled={isConversationActive}
                                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed ${isVisionMode
-                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30 shadow-lg shadow-purple-500/10'
+                                    ? 'bg-[#FFBF00]/15 text-[#FFBF00] border border-[#FFBF00]/30 shadow-lg shadow-[#FFBF00]/10'
                                     : 'bg-white/[0.04] text-slate-500 border border-white/[0.06] hover:bg-white/[0.08] hover:text-slate-300'
                                     }`}
                                 title={isVisionMode ? 'Switch to Voice Mode' : 'Switch to Vision Mode'}
+                                style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                             >
                                 {isVisionMode ? (
                                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -646,7 +661,7 @@ const Conversation: React.FC = () => {
                             <button
                                 onClick={() => setSceneImagesEnabled(!sceneImagesEnabled)}
                                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-semibold ${sceneImagesEnabled
-                                    ? 'bg-gradient-to-r from-amber-500/15 to-orange-500/15 text-amber-300 border border-amber-500/25'
+                                    ? 'bg-gradient-to-r from-[#FFBF00]/12 to-[#00FF41]/12 text-[#FFBF00] border border-[#FFBF00]/20'
                                     : 'bg-white/[0.04] text-slate-500 border border-white/[0.06] hover:bg-white/[0.08] hover:text-slate-300'
                                     }`}
                                 title={sceneImagesEnabled ? 'Disable scene images' : 'Enable scene images'}
@@ -654,7 +669,7 @@ const Conversation: React.FC = () => {
                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                 </svg>
-                                {sceneImagesEnabled && <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />}
+                                {sceneImagesEnabled && <div className="w-1.5 h-1.5 rounded-full bg-[#FFBF00] animate-pulse" />}
                             </button>
                         </div>
                     </div>
@@ -688,7 +703,7 @@ const Conversation: React.FC = () => {
                                 value={selectedLanguage}
                                 onChange={(e) => setSelectedLanguage(e.target.value)}
                                 disabled={isConversationActive}
-                                className="appearance-none bg-black/20 hover:bg-white/[0.06] border border-white/[0.08] text-cyan-300 text-xs sm:text-sm font-semibold rounded-full pl-4 pr-10 py-2 transition-all focus:outline-none focus:ring-1 focus:ring-cyan-500/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                className="appearance-none bg-black/20 hover:bg-white/[0.06] border border-white/[0.08] text-[#00FF41] text-xs sm:text-sm font-semibold rounded-full pl-4 pr-10 py-2 transition-all focus:outline-none focus:ring-1 focus:ring-[#00FF41]/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                             >
                                 {LANGUAGES.map(lang => <option key={lang} value={lang} className="bg-slate-900 text-slate-200">{lang}</option>)}
                             </select>
@@ -704,10 +719,11 @@ const Conversation: React.FC = () => {
                             value={proficiencyLevel}
                             onChange={(e) => setProficiencyLevel(e.target.value)}
                             disabled={isConversationActive}
-                            title="Select your proficiency level"
-                            className="appearance-none bg-black/20 hover:bg-white/[0.06] border border-white/[0.08] text-emerald-300 text-xs sm:text-sm font-semibold rounded-full pl-4 pr-10 py-2 transition-all focus:outline-none focus:ring-1 focus:ring-emerald-500/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            title="Select your cognitive tier"
+                            className="appearance-none bg-black/20 hover:bg-white/[0.06] border border-white/[0.08] text-[#FFBF00] text-xs sm:text-sm font-semibold rounded-full pl-4 pr-10 py-2 transition-all focus:outline-none focus:ring-1 focus:ring-[#FFBF00]/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                         >
-                            {PROFICIENCY_LEVELS.map(level => <option key={level} value={level} className="bg-slate-900 text-emerald-200">{level}</option>)}
+                            {PROFICIENCY_LEVELS.map(level => <option key={level.value} value={level.value} className="bg-[#0A0A0B] text-[#FFBF00]">{level.label}</option>)}
                         </select>
                     </div>
 
@@ -721,9 +737,10 @@ const Conversation: React.FC = () => {
                             onChange={(e) => setSelectedVoice(e.target.value)}
                             disabled={isConversationActive}
                             title="Select AI Voice"
-                            className="appearance-none bg-black/20 hover:bg-white/[0.06] border border-white/[0.08] text-indigo-300 text-xs sm:text-sm font-semibold rounded-full pl-4 pr-10 py-2 transition-all focus:outline-none focus:ring-1 focus:ring-indigo-500/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            className="appearance-none bg-black/20 hover:bg-white/[0.06] border border-white/[0.08] text-slate-400 text-xs sm:text-sm font-semibold rounded-full pl-4 pr-10 py-2 transition-all focus:outline-none focus:ring-1 focus:ring-white/20 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                         >
-                            {VOICES.map(voice => <option key={voice} value={voice} className="bg-slate-900 text-indigo-200">{voice}</option>)}
+                            {VOICES.map(voice => <option key={voice} value={voice} className="bg-[#0A0A0B] text-slate-300">{voice}</option>)}
                         </select>
                     </div>
                 </div>
@@ -732,14 +749,14 @@ const Conversation: React.FC = () => {
                 {isConversationActive && (
                     <div className="px-4 py-1.5 bg-slate-900/80 border-b border-white/[0.04] flex items-center justify-between text-[10px] font-mono text-slate-500">
                         <div className="flex items-center gap-3">
-                            <span>📡 msgs: <span className="text-cyan-400">{messageCount}</span></span>
-                            <span>🔊 audio: <span className="text-emerald-400">{audioChunkCount}</span></span>
-                            <span>📝 log: <span className="text-amber-400">{transcriptionLog.length}</span></span>
+                            <span>📡 msgs: <span className="text-[#00FF41]">{messageCount}</span></span>
+                            <span>🔊 audio: <span className="text-[#00FF41]">{audioChunkCount}</span></span>
+                            <span>📝 log: <span className="text-[#FFBF00]">{transcriptionLog.length}</span></span>
                         </div>
                         <div className="flex items-center gap-2">
                             <span>vol: {(volume * 100).toFixed(0)}%</span>
                             <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                <div className="h-full bg-gradient-to-r from-emerald-500 to-cyan-400 rounded-full transition-all duration-100" style={{ width: `${Math.min(volume * 100, 100)}%` }} />
+                                <div className="h-full bg-gradient-to-r from-[#00FF41] to-[#FFBF00] rounded-full transition-all duration-100" style={{ width: `${Math.min(volume * 100, 100)}%` }} />
                             </div>
                         </div>
                     </div>
@@ -788,16 +805,21 @@ const Conversation: React.FC = () => {
                                                 </div>
                                             </div>
                                         </div>
-                                        <h2 className="text-emerald-400 text-xl sm:text-2xl font-bold tracking-tight mb-2">
-                                            Connected! Speak Now
+                                        <h2 className="text-[#00FF41] text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
+                                            Neural Sync Active
                                         </h2>
-                                        <p className="text-slate-400 text-sm font-medium max-w-sm leading-relaxed mb-4">
-                                            Say something in <span className="text-white font-semibold">{selectedLanguage}</span> — your AI tutor will respond in real-time with voice and text
+                                        <p className="text-slate-400 text-sm font-medium max-w-sm leading-relaxed mb-4" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                                            {proficiencyLevel === 'Advanced'
+                                                ? 'SYSTEM ALERT: Full Immersion Engaged. Linguistic assistance is deprecated. Entering dialectical mastery.'
+                                                : proficiencyLevel === 'Intermediate'
+                                                    ? 'Engaging fluidity protocols. Focus on conversational cadence.'
+                                                    : 'Initialize structural acquisition. GLOSSOS is monitoring syntax.'
+                                            }
                                         </p>
                                         <div className="flex flex-col gap-2 text-xs text-slate-500">
                                             <div className="flex items-center gap-2 justify-center">
-                                                <span className="text-emerald-500">💡</span>
-                                                <span>Try: <em className="text-slate-400">"Hello, I want to learn {selectedLanguage}"</em></span>
+                                                <span className="text-[#00FF41]">◉</span>
+                                                <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>Speak in <em className="text-[#FFBF00]">{selectedLanguage}</em> to begin</span>
                                             </div>
                                         </div>
                                     </div>
@@ -830,32 +852,32 @@ const Conversation: React.FC = () => {
                                                 <MicrophoneIcon className="w-10 h-10 sm:w-12 sm:h-12 text-cyan-400/60 relative z-10" />
                                             </div>
                                         </div>
-                                        <h2 className="text-white text-xl sm:text-2xl font-bold tracking-tight mb-2">
-                                            Ready to Practice?
+                                        <h2 className="text-white text-xl sm:text-2xl font-bold tracking-tighter mb-2" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
+                                            Awaiting Neural Sync
                                         </h2>
-                                        <p className="text-slate-500 text-sm sm:text-base font-medium max-w-sm leading-relaxed mb-5">
-                                            Tap the microphone below to start a conversation with your AI language tutor
+                                        <p className="text-slate-500 text-sm sm:text-base font-medium max-w-sm leading-relaxed mb-5" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                                            Initialize a linguistic sync to begin cognitive acquisition
                                         </p>
 
                                         {/* How It Works Steps */}
                                         <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-6 text-xs text-slate-600">
                                             <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-[10px]">1</div>
-                                                <span className="font-medium">Tap mic</span>
+                                                <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">1</div>
+                                                <span className="font-medium">Initialize</span>
                                             </div>
                                             <svg className="w-3 h-3 text-slate-700 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                             </svg>
                                             <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-[10px]">2</div>
-                                                <span className="font-medium">Speak naturally</span>
+                                                <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">2</div>
+                                                <span className="font-medium">Transmit</span>
                                             </div>
                                             <svg className="w-3 h-3 text-slate-700 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                             </svg>
                                             <div className="flex items-center gap-2">
-                                                <div className="w-6 h-6 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-[10px]">3</div>
-                                                <span className="font-medium">Get instant feedback</span>
+                                                <div className="w-6 h-6 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold text-[10px]">3</div>
+                                                <span className="font-medium">Neural analysis</span>
                                             </div>
                                         </div>
                                     </div>
@@ -871,22 +893,22 @@ const Conversation: React.FC = () => {
                                         {/* Speaker Label */}
                                         <div className={`flex items-center gap-2 mb-1.5 ${entry.speaker === 'You' ? 'justify-end' : 'justify-start'}`}>
                                             {entry.speaker === 'Tutor' && (
-                                                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
-                                                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#FFBF00] to-[#00FF41] flex items-center justify-center">
+                                                    <svg className="w-3 h-3 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                                                     </svg>
                                                 </div>
                                             )}
-                                            <span className={`text-[10px] font-bold uppercase tracking-[0.15em] ${entry.speaker === 'You' ? 'text-blue-400/60' : 'text-cyan-400/60'}`}>
-                                                {entry.speaker === 'You' ? 'You' : 'FluencyFlow'}
+                                            <span className={`text-[10px] font-bold uppercase tracking-[0.15em]`} style={{ fontFamily: "'IBM Plex Mono', monospace", color: entry.speaker === 'You' ? '#F5F5F7' : '#00FF41', opacity: 0.6 }}>
+                                                {entry.speaker === 'You' ? 'You' : 'GLOSSOS'}
                                             </span>
                                         </div>
 
                                         {/* Message Bubble */}
                                         <div className={`px-5 py-3.5 sm:px-6 sm:py-4 rounded-2xl text-[14px] sm:text-[15px] leading-relaxed shadow-lg border
                                             ${entry.speaker === 'You'
-                                                ? 'bg-gradient-to-br from-blue-600/90 to-cyan-600/90 text-white border-blue-500/20 rounded-br-md'
-                                                : 'bg-[#13151d]/90 text-slate-200 border-white/[0.06] rounded-bl-md'
+                                                ? 'bg-gradient-to-br from-[#1a1a1a]/90 to-[#111]/90 text-[#F5F5F7] border-white/[0.08] rounded-br-md'
+                                                : 'bg-[#0d0d0e]/90 text-[#F5F5F7] border-[#00FF41]/[0.08] rounded-bl-md'
                                             } ${!entry.isFinal ? 'opacity-90' : ''}`}>
                                             {entry.text}
                                             {!entry.isFinal && <span className="inline-block w-0.5 h-4 ml-1 align-middle bg-current animate-blink opacity-60" />}
@@ -904,6 +926,7 @@ const Conversation: React.FC = () => {
                                         )}
 
                                         {/* Score & Actions */}
+                                        {/* Neural Integrity Rate & Actions */}
                                         {entry.speaker === 'You' && entry.isFinal && (entry.pronunciationScore !== undefined || entry.audioUrl) && (
                                             <div className="flex items-center gap-2.5 mt-2 justify-end">
                                                 <div className="flex items-center gap-2.5 bg-black/30 rounded-full px-3 py-1.5 border border-white/[0.08] backdrop-blur-sm">
@@ -1028,9 +1051,9 @@ const Conversation: React.FC = () => {
 
 
                     {/* Background glow */}
-                    <div className={`absolute inset-0 transition-all duration-1000 pointer-events-none ${isConversationActive
-                        ? 'bg-gradient-to-t from-cyan-900/10 via-transparent to-transparent'
-                        : 'bg-gradient-to-t from-slate-900/30 to-transparent'
+                    <div className={`absolute inset-0 transition-all duration-1000 pointer-events-none bg-gradient-to-t ${isConversationActive
+                        ? (LEVEL_COLORS[proficiencyLevel]?.glow || 'from-[#00FF41]/10 via-transparent to-transparent')
+                        : 'from-slate-900/30 to-transparent'
                         }`} />
 
                     {/* Sound wave visualizer — only when active */}
@@ -1077,13 +1100,13 @@ const Conversation: React.FC = () => {
 
                             {/* Ping ring when active */}
                             {isConversationActive && (
-                                <div className="absolute inset-0 rounded-full bg-gradient-to-r from-cyan-500/30 to-indigo-500/30 animate-ping-slow" />
+                                <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#FFBF00]/30 to-[#00FF41]/20 animate-ping-slow" />
                             )}
 
                             {/* Dynamic Volume Ring 1 */}
                             {isConversationActive && (
                                 <div
-                                    className="absolute inset-0 rounded-full border-2 border-cyan-400/20 transition-all duration-100 ease-out"
+                                    className="absolute inset-0 rounded-full border-2 border-[#FFBF00]/20 transition-all duration-100 ease-out"
                                     style={{
                                         transform: `scale(${1 + volume * 0.4})`,
                                         opacity: 0.4 + volume * 0.6,
@@ -1093,7 +1116,7 @@ const Conversation: React.FC = () => {
                             {/* Dynamic Volume Ring 2 */}
                             {isConversationActive && (
                                 <div
-                                    className="absolute inset-0 rounded-full border border-indigo-400/10 transition-all duration-200 ease-out"
+                                    className="absolute inset-0 rounded-full border border-[#00FF41]/10 transition-all duration-200 ease-out"
                                     style={{
                                         transform: `scale(${1 + volume * 0.7})`,
                                         opacity: 0.2,
@@ -1105,15 +1128,15 @@ const Conversation: React.FC = () => {
                             <div
                                 className={`absolute rounded-full shadow-2xl transition-all duration-500 flex items-center justify-center border overflow-hidden
                                     ${isConversationActive
-                                        ? 'bg-gradient-to-br from-rose-500 to-red-600 border-rose-400/30 shadow-rose-500/30'
-                                        : 'bg-gradient-to-br from-[#12141e] via-[#161925] to-[#0d0f17] border-white/[0.08] group-hover:border-cyan-500/30 hover:scale-[1.03] animate-breathe shadow-cyan-500/10'
+                                        ? 'bg-gradient-to-br from-rose-600 to-red-700 border-rose-500/30 shadow-rose-500/30'
+                                        : 'bg-gradient-to-br from-[#0f0f0f] via-[#141410] to-[#0a0a08] border-white/[0.06] group-hover:border-[#FFBF00]/30 hover:scale-[1.03] animate-breathe shadow-[#FFBF00]/10'
                                     }
                                 `}
                                 style={{ inset: '8px' }}
                             >
                                 {/* Inner glow on hover (idle) */}
                                 {!isConversationActive && (
-                                    <div className="absolute inset-0 bg-gradient-to-tr from-cyan-500/10 via-transparent to-indigo-500/5 opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+                                    <div className="absolute inset-0 bg-gradient-to-tr from-[#FFBF00]/10 via-transparent to-[#00FF41]/5 opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
                                 )}
 
                                 {/* Active inner shimmer */}
@@ -1126,7 +1149,7 @@ const Conversation: React.FC = () => {
                                     <StopIcon className="w-8 h-8 sm:w-10 sm:h-10 text-white drop-shadow-lg relative z-10" />
                                 ) : (
                                     <svg
-                                        className="w-10 h-10 sm:w-12 sm:h-12 relative z-10 drop-shadow-lg transition-colors duration-300 text-cyan-400/80 group-hover:text-cyan-300"
+                                        className="w-10 h-10 sm:w-12 sm:h-12 relative z-10 drop-shadow-lg transition-colors duration-300 text-[#FFBF00]/80 group-hover:text-[#FFBF00]"
                                         xmlns="http://www.w3.org/2000/svg"
                                         fill="none"
                                         viewBox="0 0 24 24"
@@ -1144,29 +1167,33 @@ const Conversation: React.FC = () => {
                         </button>
 
                         {/* Help Button (Only when active) */}
-                        {isConversationActive && (
+                        {isConversationActive && proficiencyLevel !== 'Advanced' && (
                             <button
                                 onClick={handleHelpMe}
-                                className="flex flex-col items-center justify-center w-[72px] sm:w-[80px] gap-1 px-2 py-2 sm:py-3 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 transition-all hover:scale-105 active:scale-95 shadow-lg shadow-black/20"
+                                className="flex flex-col items-center justify-center w-[72px] sm:w-[80px] gap-1 px-2 py-2 sm:py-3 rounded-2xl bg-[#FFBF00]/10 hover:bg-[#FFBF00]/20 border border-[#FFBF00]/30 text-[#FFBF00] transition-all hover:scale-105 active:scale-95 shadow-lg shadow-black/20"
+                                style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                             >
                                 <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
-                                <span className="text-[10px] font-bold uppercase tracking-wider">Help</span>
+                                <span className="text-[10px] font-bold uppercase tracking-wider">Assist</span>
                             </button>
                         )}
                     </div>
 
                     {/* Status Label */}
-                    <p className={`mt-5 sm:mt-6 text-[10px] sm:text-[11px] uppercase tracking-[0.3em] font-bold transition-colors duration-300 ${connectionState === 'CONNECTED' ? 'text-cyan-400/70' :
-                        connectionState === 'CONNECTING' ? 'text-amber-400/70' :
-                            connectionState === 'ERROR' ? 'text-rose-400/70' :
-                                'text-slate-600'
-                        }`}>
-                        {connectionState === 'CONNECTING' ? 'Establishing Connection...' :
-                            connectionState === 'CONNECTED' ? '● Listening' :
-                                connectionState === 'ERROR' ? 'Tap to Retry' :
-                                    'Tap to Speak'
+                    <p className={`mt-5 sm:mt-6 text-[10px] sm:text-[11px] uppercase tracking-[0.3em] font-bold transition-colors duration-300`}
+                        style={{
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            color: connectionState === 'CONNECTED' ? '#00FF41' :
+                                connectionState === 'CONNECTING' ? '#FFBF00' :
+                                    connectionState === 'ERROR' ? '#f87171' : '#4b5563',
+                            opacity: 0.7
+                        }}>
+                        {connectionState === 'CONNECTING' ? 'Establishing Neural Link...' :
+                            connectionState === 'CONNECTED' ? '◉ Monitoring' :
+                                connectionState === 'ERROR' ? 'Reinitialize' :
+                                    'Initialize Sync'
                         }
                     </p>
                 </div>

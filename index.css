@@ -1,9 +1,21 @@
 /* ========================================================
-   FluencyFlow — Premium Design System
+   GLOSSOS — Clinical Minimalism Design System
    ======================================================== */
 
-/* Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Google Fonts — Inter Tight for headings, IBM Plex Mono for system text */
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+/* ========================================================
+   Design Tokens (CSS Custom Properties)
+   ======================================================== */
+:root {
+    --obsidian: #0A0A0B;
+    --terminal-green: #00FF41;
+    --sacred-amber: #FFBF00;
+    --vellum-white: #F5F5F7;
+    --glass-border: rgba(255, 255, 255, 0.03);
+    --glass-bg: rgba(10, 10, 11, 0.7);
+}
 
 /* Base reset */
 *,
@@ -16,7 +28,20 @@ body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background: #030305;
+    background: var(--obsidian);
+    color: var(--vellum-white);
+}
+
+/* Heading typography */
+h1, h2, .heading-tight {
+    font-family: 'Inter Tight', 'Inter', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+}
+
+/* System / Terminal typography */
+.font-mono, .system-text, code, pre, .terminal-text {
+    font-family: 'IBM Plex Mono', 'JetBrains Mono', monospace;
 }
 
 /* ========================================================
@@ -28,7 +53,6 @@ body {
         opacity: 0;
         transform: translateY(12px);
     }
-
     to {
         opacity: 1;
         transform: translateY(0);
@@ -40,7 +64,6 @@ body {
         opacity: 0;
         transform: translateY(20px);
     }
-
     to {
         opacity: 1;
         transform: translateY(0);
@@ -48,26 +71,13 @@ body {
 }
 
 @keyframes shimmer {
-    0% {
-        transform: translateX(-100%);
-    }
-
-    100% {
-        transform: translateX(100%);
-    }
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
 }
 
 @keyframes blink {
-
-    0%,
-    50% {
-        opacity: 1;
-    }
-
-    51%,
-    100% {
-        opacity: 0;
-    }
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
 }
 
 @keyframes ping-slow {
@@ -75,122 +85,72 @@ body {
         transform: scale(1);
         opacity: 0.25;
     }
-
-    75%,
-    100% {
+    75%, 100% {
         transform: scale(1.8);
         opacity: 0;
     }
 }
 
 @keyframes breathe {
-
-    0%,
-    100% {
+    0%, 100% {
         transform: scale(1);
-        box-shadow: 0 0 40px rgba(6, 182, 212, 0.15), 0 0 80px rgba(6, 182, 212, 0.05);
+        box-shadow: 0 0 40px rgba(255, 191, 0, 0.10), 0 0 80px rgba(255, 191, 0, 0.04);
     }
-
     50% {
         transform: scale(1.04);
-        box-shadow: 0 0 60px rgba(6, 182, 212, 0.25), 0 0 120px rgba(6, 182, 212, 0.1);
+        box-shadow: 0 0 60px rgba(255, 191, 0, 0.18), 0 0 120px rgba(255, 191, 0, 0.08);
     }
 }
 
 @keyframes float {
-
-    0%,
-    100% {
-        transform: translateY(0px);
-    }
-
-    50% {
-        transform: translateY(-6px);
-    }
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-6px); }
 }
 
 @keyframes rotate-slow {
-    from {
-        transform: rotate(0deg);
-    }
-
-    to {
-        transform: rotate(360deg);
-    }
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 @keyframes gradient-shift {
-    0% {
-        background-position: 0% 50%;
-    }
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
 
-    50% {
-        background-position: 100% 50%;
-    }
+@keyframes terminal-glow {
+    0%, 100% { text-shadow: 0 0 8px rgba(0, 255, 65, 0.3); }
+    50% { text-shadow: 0 0 16px rgba(0, 255, 65, 0.5), 0 0 32px rgba(0, 255, 65, 0.15); }
+}
 
-    100% {
-        background-position: 0% 50%;
-    }
+@keyframes amber-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
 }
 
 @keyframes wave-1 {
-
-    0%,
-    100% {
-        height: 12px;
-    }
-
-    50% {
-        height: 28px;
-    }
+    0%, 100% { height: 12px; }
+    50% { height: 28px; }
 }
 
 @keyframes wave-2 {
-
-    0%,
-    100% {
-        height: 20px;
-    }
-
-    50% {
-        height: 36px;
-    }
+    0%, 100% { height: 20px; }
+    50% { height: 36px; }
 }
 
 @keyframes wave-3 {
-
-    0%,
-    100% {
-        height: 16px;
-    }
-
-    50% {
-        height: 32px;
-    }
+    0%, 100% { height: 16px; }
+    50% { height: 32px; }
 }
 
 @keyframes wave-4 {
-
-    0%,
-    100% {
-        height: 24px;
-    }
-
-    50% {
-        height: 14px;
-    }
+    0%, 100% { height: 24px; }
+    50% { height: 14px; }
 }
 
 @keyframes wave-5 {
-
-    0%,
-    100% {
-        height: 10px;
-    }
-
-    50% {
-        height: 26px;
-    }
+    0%, 100% { height: 10px; }
+    50% { height: 26px; }
 }
 
 /* ========================================================
@@ -234,6 +194,14 @@ body {
     animation: gradient-shift 6s ease infinite;
 }
 
+.animate-terminal-glow {
+    animation: terminal-glow 3s ease-in-out infinite;
+}
+
+.animate-amber-pulse {
+    animation: amber-pulse 2s ease-in-out infinite;
+}
+
 /* ========================================================
    Line Clamp
    ======================================================== */
@@ -247,11 +215,11 @@ body {
 }
 
 /* ========================================================
-   Custom Scrollbars
+   Custom Scrollbars (Clinical)
    ======================================================== */
 
 ::-webkit-scrollbar {
-    width: 5px;
+    width: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -259,90 +227,76 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.04);
     border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(0, 255, 65, 0.15);
 }
 
 /* ========================================================
-   Sound Wave Visualizer Bars
+   Sound Wave Visualizer Bars (Terminal Green)
    ======================================================== */
 
 .sound-wave-bar {
     width: 3px;
     border-radius: 999px;
-    background: linear-gradient(to top, rgba(6, 182, 212, 0.8), rgba(99, 102, 241, 0.8));
+    background: linear-gradient(to top, rgba(0, 255, 65, 0.7), rgba(255, 191, 0, 0.6));
 }
 
-.sound-wave-bar:nth-child(1) {
-    animation: wave-1 1.2s ease-in-out infinite;
-}
-
-.sound-wave-bar:nth-child(2) {
-    animation: wave-2 1.0s ease-in-out infinite 0.1s;
-}
-
-.sound-wave-bar:nth-child(3) {
-    animation: wave-3 0.9s ease-in-out infinite 0.2s;
-}
-
-.sound-wave-bar:nth-child(4) {
-    animation: wave-4 1.1s ease-in-out infinite 0.15s;
-}
-
-.sound-wave-bar:nth-child(5) {
-    animation: wave-5 1.3s ease-in-out infinite 0.05s;
-}
+.sound-wave-bar:nth-child(1) { animation: wave-1 1.2s ease-in-out infinite; }
+.sound-wave-bar:nth-child(2) { animation: wave-2 1.0s ease-in-out infinite 0.1s; }
+.sound-wave-bar:nth-child(3) { animation: wave-3 0.9s ease-in-out infinite 0.2s; }
+.sound-wave-bar:nth-child(4) { animation: wave-4 1.1s ease-in-out infinite 0.15s; }
+.sound-wave-bar:nth-child(5) { animation: wave-5 1.3s ease-in-out infinite 0.05s; }
 
 /* ========================================================
-   Mic Button Glow Ring
+   Mic Button Glow Ring (Sacred Amber)
    ======================================================== */
 
 .mic-outer-ring {
     background: conic-gradient(from 0deg,
-            rgba(6, 182, 212, 0.5),
-            rgba(99, 102, 241, 0.5),
-            rgba(168, 85, 247, 0.3),
-            rgba(6, 182, 212, 0.5));
+            rgba(255, 191, 0, 0.5),
+            rgba(0, 255, 65, 0.3),
+            rgba(255, 191, 0, 0.2),
+            rgba(255, 191, 0, 0.5));
     animation: rotate-slow 8s linear infinite;
 }
 
 .mic-button-gradient {
-    background: linear-gradient(135deg, #0e7490, #4f46e5, #7c3aed);
+    background: linear-gradient(135deg, #1a1a0a, #2a2000, #0a1a00);
     background-size: 200% 200%;
     animation: gradient-shift 5s ease infinite;
 }
 
 /* ========================================================
-   Premium glass effects
+   Premium Glass Effects (Deepened Clinical)
    ======================================================== */
 
 .glass-card {
-    background: rgba(15, 17, 23, 0.6);
-    backdrop-filter: blur(40px) saturate(1.5);
-    -webkit-backdrop-filter: blur(40px) saturate(1.5);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--glass-bg);
+    backdrop-filter: blur(60px) saturate(1.8);
+    -webkit-backdrop-filter: blur(60px) saturate(1.8);
+    border: 1px solid var(--glass-border);
 }
 
 .glass-header {
     background: linear-gradient(180deg,
-            rgba(255, 255, 255, 0.04) 0%,
+            rgba(255, 255, 255, 0.02) 0%,
             rgba(255, 255, 255, 0) 100%);
 }
 
 /* ========================================================
-   Ambient background blobs
+   Ambient Background Blobs (Muted Obsidian)
    ======================================================== */
 
 .ambient-blob {
     position: absolute;
     border-radius: 50%;
     pointer-events: none;
-    filter: blur(100px);
-    opacity: 0.08;
+    filter: blur(120px);
+    opacity: 0.05;
 }
 
 .ambient-blob-1 {
@@ -350,7 +304,7 @@ body {
     left: -10%;
     width: 50%;
     height: 50%;
-    background: radial-gradient(circle, #6366f1, transparent 70%);
+    background: radial-gradient(circle, rgba(0, 255, 65, 0.4), transparent 70%);
 }
 
 .ambient-blob-2 {
@@ -358,7 +312,7 @@ body {
     right: -10%;
     width: 50%;
     height: 50%;
-    background: radial-gradient(circle, #06b6d4, transparent 70%);
+    background: radial-gradient(circle, rgba(255, 191, 0, 0.3), transparent 70%);
 }
 
 .ambient-blob-3 {
@@ -366,6 +320,41 @@ body {
     right: 15%;
     width: 30%;
     height: 30%;
-    background: radial-gradient(circle, #8b5cf6, transparent 70%);
-    opacity: 0.05;
+    background: radial-gradient(circle, rgba(0, 255, 65, 0.2), transparent 70%);
+    opacity: 0.03;
 }
+
+/* ========================================================
+   Level Theme Overrides
+   ======================================================== */
+
+/* The Foundation — Clean Vellum White accents */
+.theme-foundation .glass-card {
+    border-color: rgba(245, 245, 247, 0.04);
+}
+
+/* The Bridge — Terminal Green glow */
+.theme-bridge .ambient-blob-1 {
+    background: radial-gradient(circle, rgba(0, 255, 65, 0.5), transparent 70%);
+    opacity: 0.08;
+}
+
+/* The Pantheon — Sacred Amber dominance */
+.theme-pantheon .ambient-blob-1,
+.theme-pantheon .ambient-blob-2 {
+    background: radial-gradient(circle, rgba(255, 191, 0, 0.4), transparent 70%);
+    opacity: 0.08;
+}
+
+.theme-pantheon .glass-card {
+    border-color: rgba(255, 191, 0, 0.06);
+}
+
+/* ========================================================
+   Neural Integrity Colors
+   ======================================================== */
+
+.neural-green { color: var(--terminal-green); }
+.neural-amber { color: var(--sacred-amber); }
+.bg-terminal-green { background-color: var(--terminal-green); }
+.bg-sacred-amber { background-color: var(--sacred-amber); }

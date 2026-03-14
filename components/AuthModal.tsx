@@ -134,21 +134,21 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
             <div className="relative w-full max-w-md mx-4 p-8 bg-[#0f1117] border border-white/10 rounded-3xl shadow-2xl">
                 {/* Ambient glow */}
-                <div className="absolute -inset-1 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 rounded-3xl blur-xl" />
+                <div className="absolute -inset-1 bg-gradient-to-r from-[#FFBF00]/20 to-[#00FF41]/20 rounded-3xl blur-xl" />
 
                 <div className="relative">
                     {/* Header */}
                     <div className="text-center mb-8">
-                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 mb-4">
-                            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-[#FFBF00] to-[#00FF41] mb-4">
+                            <svg className="w-8 h-8 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                             </svg>
                         </div>
-                        <h2 className="text-2xl font-bold text-white mb-2">
-                            Welcome to Fluency<span className="text-cyan-400">Flow</span>
+                        <h2 className="text-2xl font-bold text-white mb-2" style={{ fontFamily: "'Inter Tight', sans-serif", letterSpacing: '-0.025em' }}>
+                            Welcome to GLOSS<span className="text-[#FFBF00]">OS</span>
                         </h2>
-                        <p className="text-slate-400 text-sm">
-                            Sign in to save your progress and personalize your learning experience
+                        <p className="text-slate-400 text-sm" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                            Authenticate to initialize your neural profile
                         </p>
                     </div>
 
@@ -185,8 +185,8 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
                     </div>
 
                     {/* Info text */}
-                    <p className="mt-6 text-center text-xs text-slate-500">
-                        Guest mode won't save your progress across sessions
+                    <p className="mt-6 text-center text-xs text-slate-500" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+                        Guest mode — neural profile will not persist across syncs
                     </p>
                 </div>
             </div>

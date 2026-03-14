@@ -44,10 +44,10 @@ export function startLiveSession(
   const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
 
   // Explicit log to console
-  console.log('[FluencyFlow] Starting Live Session with key length:', apiKey?.length);
+  console.log('[GLOSSOS] Starting Live Session with key length:', apiKey?.length);
 
   if (!apiKey) {
-    console.error('[FluencyFlow] API Key is missing!');
+    console.error('[GLOSSOS] API Key is missing!');
     throw new Error("API_KEY environment variable not set");
   }
 
@@ -102,8 +102,8 @@ This creates an immersive experience where the learner can connect words to real
 `;
 
   const baseInstruction = language === nativeLanguage
-    ? `You are FluencyFlow, a friendly and encouraging language tutor. The user wants to practice ${language} (their native language). Focus on advanced vocabulary and public speaking skills. Level: ${proficiencyLevel}. ${selectedLevelInstruction} Keep your responses concise and clear.${phoneticInstructions}${situationalSceneInstructions}`
-    : `You are FluencyFlow, a friendly and encouraging language tutor. The user is a ${nativeLanguage} speaker trying to learn ${language}. Level: ${proficiencyLevel}. ${selectedLevelInstruction} You must speak ONLY in ${language}, even if the user speaks ${nativeLanguage} (unless explaining a complex concept or translating for a Beginner). If the user gets stuck, explain in ${nativeLanguage}. Keep your responses concise and clear, and ask questions to keep the conversation going. Start with a simple greeting in ${language}.${phoneticInstructions}${situationalSceneInstructions}`;
+    ? `You are GLOSSOS, an elite linguistic mastery system. The user wants to practice ${language} (their native language). Focus on advanced vocabulary, public speaking skills, and dialectical mastery. Level: ${proficiencyLevel}. ${selectedLevelInstruction} Keep your responses concise and clinical.${phoneticInstructions}${situationalSceneInstructions}`
+    : `You are GLOSSOS, an elite linguistic mastery system. The user is a ${nativeLanguage} speaker acquiring ${language}. Level: ${proficiencyLevel}. ${selectedLevelInstruction} You must speak ONLY in ${language}, even if the user speaks ${nativeLanguage} (unless explaining a complex concept or translating for a Beginner). If the user gets stuck, explain in ${nativeLanguage}. Keep your responses concise and precise, and ask questions to maintain conversational cadence. ${proficiencyLevel === 'Advanced' ? 'Begin with: "Inmersión Total. Motor dialéctico activado." for Spanish or the equivalent in the target language. Do not offer help or simplification.' : proficiencyLevel === 'Intermediate' ? 'Begin with: "Engaging fluidity protocols. Focus on conversational cadence."' : 'Begin with a simple greeting in ${language}. Say: "Inicializando adquisición estructural." for Spanish or the equivalent greeting.'} ${phoneticInstructions}${situationalSceneInstructions}`;
 
   const systemInstruction = userContext
     ? `${baseInstruction}\n\n${userContext}`
@@ -113,11 +113,11 @@ This creates an immersive experience where the learner can connect words to real
     try {
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${apiKey}`;
 
-      console.log('[FluencyFlow] Opening WebSocket connection...');
+      console.log('[GLOSSOS] Opening WebSocket connection...');
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log('[FluencyFlow] ✅ WebSocket OPEN — sending setup...');
+        console.log('[GLOSSOS] ✅ WebSocket OPEN — sending setup...');
 
         // Send setup message
         const setupMsg = {
@@ -155,13 +155,13 @@ This creates an immersive experience where the learner can connect words to real
             data = JSON.parse(new TextDecoder().decode(event.data));
           }
         } catch (e) {
-          console.error('[FluencyFlow] Failed to parse message:', e);
+          console.error('[GLOSSOS] Failed to parse message:', e);
           return;
         }
 
         // If this is the setupComplete message, resolve the session
         if (data.setupComplete !== undefined) {
-          console.log('[FluencyFlow] ✅ Setup complete — session ready!');
+          console.log('[GLOSSOS] ✅ Setup complete — session ready!');
           callbacks.onOpen();
 
           const session: LiveSession = {
@@ -179,7 +179,7 @@ This creates an immersive experience where the learner can connect words to real
             },
             sendText: (text: string) => {
               if (ws.readyState !== WebSocket.OPEN) {
-                console.log('[FluencyFlow] Cannot send text: WebSocket not open');
+                console.log('[GLOSSOS] Cannot send text: WebSocket not open');
                 return;
               }
               const msg = {
@@ -191,7 +191,7 @@ This creates an immersive experience where the learner can connect words to real
                   turnComplete: true
                 }
               };
-              console.log('[FluencyFlow] Sending text to Gemini:', JSON.stringify(msg));
+              console.log('[GLOSSOS] Sending text to Gemini:', JSON.stringify(msg));
               ws.send(JSON.stringify(msg));
             },
             close: () => {
@@ -208,13 +208,13 @@ This creates an immersive experience where the learner can connect words to real
       };
 
       ws.onerror = (e: Event) => {
-        console.error('[FluencyFlow] ❌ WebSocket error:', e);
+        console.error('[GLOSSOS] ❌ WebSocket error:', e);
         callbacks.onError(e as ErrorEvent);
         reject(new Error('WebSocket connection error'));
       };
 
       ws.onclose = (e: CloseEvent) => {
-        console.log('[FluencyFlow] 🔌 WebSocket closed:', e.code, e.reason);
+        console.log('[GLOSSOS] 🔌 WebSocket closed:', e.code, e.reason);
         callbacks.onClose(e);
       };
 
