@@ -39,11 +39,27 @@ const LEVEL_COLORS: Record<string, { accent: string; glow: string; text: string 
     'Advanced': { accent: '#FFBF00', glow: 'from-[#FFBF00]/15 via-transparent to-transparent', text: 'text-[#FFBF00]' },
 };
 
+const getDefaultLanguage = () => {
+    if (typeof navigator === 'undefined') return 'English';
+    const navLanguage = navigator.language || (navigator as any).userLanguage || "en";
+    if (navLanguage.startsWith("es")) return "Spanish";
+    if (navLanguage.startsWith("fr")) return "French";
+    if (navLanguage.startsWith("de")) return "German";
+    if (navLanguage.startsWith("it")) return "Italian";
+    if (navLanguage.startsWith("ja")) return "Japanese";
+    if (navLanguage.startsWith("pt")) return "Portuguese";
+    if (navLanguage.startsWith("ko")) return "Korean";
+    if (navLanguage.startsWith("zh")) return "Chinese";
+    if (navLanguage.startsWith("ru")) return "Russian";
+    if (navLanguage.startsWith("sk")) return "Slovak";
+    return "English";
+};
+
 const Conversation: React.FC = () => {
     const { user } = useAuth();
     const [connectionState, setConnectionState] = useState<ConnectionState>('IDLE');
     const [selectedLanguage, setSelectedLanguage] = useState<string>('Spanish');
-    const [nativeLanguage, setNativeLanguage] = useState<string>('English');
+    const [nativeLanguage, setNativeLanguage] = useState<string>(getDefaultLanguage());
     const [proficiencyLevel, setProficiencyLevel] = useState<string>('Beginner');
     const [selectedVoice, setSelectedVoice] = useState<string>('Puck');
     const [transcriptionLog, setTranscriptionLog] = useState<TranscriptionEntry[]>([]);
@@ -426,6 +442,19 @@ const Conversation: React.FC = () => {
             return;
         }
 
+        // Initialize AudioContext synchronously right after user interaction to bypass mobile Safari restrictions
+        try {
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            if (!inputAudioContextRef.current) {
+                inputAudioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
+            }
+            if (!outputAudioContextRef.current) {
+                outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
+            }
+        } catch (e) {
+            console.error("Failed to create AudioContext synchronously", e);
+        }
+
         setConnectionState('CONNECTING');
         setError(null);
         setMessageCount(0);
@@ -459,10 +488,10 @@ const Conversation: React.FC = () => {
             addDebugLog('Microphone acquired');
             userMediaStreamRef.current = stream;
 
-            // Use default sample rate to prevent hardware incompatibility issues
-            addDebugLog('Creating AudioContext...');
-            inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-            outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+            // Ensure contexts exist if they were cleared
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            if (!inputAudioContextRef.current) inputAudioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
+            if (!outputAudioContextRef.current) outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
 
             await inputAudioContextRef.current.resume();
             await outputAudioContextRef.current.resume();

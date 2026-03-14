@@ -5,7 +5,9 @@ import {
     signOut,
     GoogleAuthProvider,
     User,
-    onAuthStateChanged
+    onAuthStateChanged,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
 } from 'firebase/auth';
 import { auth, isFirebaseConfigured } from '../services/firebase';
 
@@ -101,6 +103,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
     const { signInWithGoogle, signInAsGuest } = useAuth();
+    const [isRegistering, setIsRegistering] = useState(false);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -130,25 +135,63 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
         }
     };
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-            <div className="relative w-full max-w-md mx-4 p-8 bg-[#0f1117] border border-white/10 rounded-3xl shadow-2xl">
-                {/* Ambient glow */}
-                <div className="absolute -inset-1 bg-gradient-to-r from-[#FFBF00]/20 to-[#00FF41]/20 rounded-3xl blur-xl" />
+    const handleEmailAuth = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!auth) {
+            setError('Firebase is not configured.');
+            return;
+        }
+        if (!email || !password) {
+            setError('Please enter both email and password.');
+            return;
+        }
+        
+        setLoading(true);
+        setError(null);
+        
+        try {
+            if (isRegistering) {
+                await createUserWithEmailAndPassword(auth, email, password);
+            } else {
+                await signInWithEmailAndPassword(auth, email, password);
+            }
+            onClose?.();
+        } catch (err: any) {
+            console.error('Email auth error:', err);
+            const msg = err.message || 'Authentication failed. Please check your credentials.';
+            setError(msg.includes('auth/invalid-credential') ? 'Invalid email or password.' : msg);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-                <div className="relative">
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <div className="relative w-full max-w-md bg-[#0f1117] border border-white/10 rounded-3xl shadow-2xl overflow-hidden animate-fade-in">
+                {/* Ambient glow */}
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#FFBF00]/40 to-[#00FF41]/40" />
+                
+                {/* Close Button if onClose is provided - although users must authenticate to use the app in some parts, a close button can be handy if they click outside or somewhere */}
+                {onClose && (
+                    <button onClick={onClose} className="absolute top-4 right-4 text-slate-500 hover:text-white transition-colors">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                )}
+
+                <div className="p-8">
                     {/* Header */}
                     <div className="text-center mb-8">
-                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-[#FFBF00] to-[#00FF41] mb-4">
-                            <svg className="w-8 h-8 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-br from-[#FFBF00]/20 to-[#00FF41]/20 border border-[#FFBF00]/30 mb-4">
+                            <svg className="w-7 h-7 text-[#FFBF00]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                             </svg>
                         </div>
                         <h2 className="text-2xl font-bold text-white mb-2" style={{ fontFamily: "'Inter Tight', sans-serif", letterSpacing: '-0.025em' }}>
-                            Welcome to GLOSS<span className="text-[#FFBF00]">OS</span>
+                            {isRegistering ? 'Create Profile' : `Welcome to GLOSS`}
+                            {!isRegistering && <span className="text-[#FFBF00]">OS</span>}
                         </h2>
                         <p className="text-slate-400 text-sm" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                            Authenticate to initialize your neural profile
+                            {isRegistering ? 'Register your neural architecture' : 'Authenticate to initialize your session'}
                         </p>
                     </div>
 
@@ -159,12 +202,50 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
                         </div>
                     )}
 
+                    {/* Email/Password Form */}
+                    <form onSubmit={handleEmailAuth} className="space-y-4 mb-6">
+                        <div>
+                            <input
+                                type="email"
+                                placeholder="Email address"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-[#00FF41]/50 focus:ring-1 focus:ring-[#00FF41]/50 transition-all font-mono text-sm"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <input
+                                type="password"
+                                placeholder="Password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-[#00FF41]/50 focus:ring-1 focus:ring-[#00FF41]/50 transition-all font-mono text-sm"
+                                required
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-full flex justify-center py-3 bg-gradient-to-r from-[#FFBF00] to-[#00FF41] hover:from-[#FFBF00]/90 hover:to-[#00FF41]/90 text-black font-bold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed uppercase tracking-wider text-sm mt-2"
+                        >
+                            {loading ? 'Processing...' : (isRegistering ? 'Register' : 'Login')}
+                        </button>
+                    </form>
+
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="h-px bg-white/10 flex-grow"></div>
+                        <span className="text-xs text-slate-500 uppercase tracking-widest font-mono">OR</span>
+                        <div className="h-px bg-white/10 flex-grow"></div>
+                    </div>
+
                     {/* Buttons */}
                     <div className="space-y-3">
                         <button
                             onClick={handleGoogleSignIn}
                             disabled={loading}
-                            className="w-full flex items-center justify-center gap-3 px-6 py-3.5 bg-white hover:bg-gray-50 text-gray-900 font-medium rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            type="button"
+                            className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white hover:bg-gray-50 text-gray-900 font-medium rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <svg className="w-5 h-5" viewBox="0 0 24 24">
                                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -172,22 +253,29 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
                                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
                                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                             </svg>
-                            {loading ? 'Signing in...' : 'Continue with Google'}
+                            Continue with Google
                         </button>
 
                         <button
                             onClick={handleGuestSignIn}
                             disabled={loading}
-                            className="w-full px-6 py-3.5 bg-[#1a1d26] hover:bg-white/5 border border-white/10 text-slate-300 font-medium rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            type="button"
+                            className="w-full px-6 py-3 bg-[#1a1d26] hover:bg-white/5 border border-white/10 text-slate-300 font-medium rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {loading ? 'Signing in...' : 'Continue as Guest'}
+                            Continue as Guest
                         </button>
                     </div>
 
-                    {/* Info text */}
-                    <p className="mt-6 text-center text-xs text-slate-500" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                        Guest mode — neural profile will not persist across syncs
-                    </p>
+                    {/* Toggle register/login */}
+                    <div className="mt-6 text-center">
+                        <button 
+                            type="button"
+                            onClick={() => setIsRegistering(!isRegistering)}
+                            className="text-sm text-[#00FF41] hover:text-white transition-colors"
+                        >
+                            {isRegistering ? 'Already have an account? Login' : "Don't have an account? Register"}
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

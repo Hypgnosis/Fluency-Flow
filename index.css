@@ -1,9 +1,11 @@
+/* Google Fonts — Inter Tight for headings, IBM Plex Mono for system text */
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@import "tailwindcss";
+
 /* ========================================================
    GLOSSOS — Clinical Minimalism Design System
    ======================================================== */
-
-/* Google Fonts — Inter Tight for headings, IBM Plex Mono for system text */
-@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
 /* ========================================================
    Design Tokens (CSS Custom Properties)

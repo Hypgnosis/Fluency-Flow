@@ -90,59 +90,30 @@ export async function generateSceneImage(
     language: string,
     usePro: boolean = true
 ): Promise<SceneImageResult> {
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set");
+    const lowerText = tutorText.toLowerCase();
+
+    const result = (imageName: string) => ({
+        imageDataUrl: `/images/scenes/${imageName}.png`,
+        prompt: 'Instant Local Scene',
+        description: tutorText,
+        timestamp: Date.now(),
+    });
+
+    if (['cafe', 'restaurant', 'bakery', 'coffee', 'breakfast', 'lunch', 'dinner', 'meal'].some(w => lowerText.includes(w))) {
+        return result('cafe');
     }
-
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const prompt = buildScenePrompt(tutorText, language);
-    const model = usePro ? IMAGE_MODEL : FLASH_IMAGE_MODEL;
-
-    try {
-        const response = await ai.models.generateContent({
-            model,
-            contents: prompt,
-            config: {
-                responseModalities: ['Image', 'Text'],
-            },
-        });
-
-        if (!response.candidates || response.candidates.length === 0) {
-            throw new Error('No image generated from the model');
-        }
-
-        const parts = response.candidates[0].content?.parts || [];
-
-        for (const part of parts) {
-            if (part.inlineData) {
-                const mimeType = part.inlineData.mimeType || 'image/png';
-                const base64Data = part.inlineData.data;
-                const imageDataUrl = `data:${mimeType};base64,${base64Data}`;
-
-                return {
-                    imageDataUrl,
-                    prompt,
-                    description: tutorText,
-                    timestamp: Date.now(),
-                };
-            }
-        }
-
-        // If Pro model fails, fallback to Flash
-        if (usePro) {
-            console.warn('Nano Banana Pro returned no image, falling back to Nano Banana Flash');
-            return generateSceneImage(tutorText, language, false);
-        }
-
-        throw new Error('No image data found in response');
-    } catch (error) {
-        // Fallback to Flash model on first failure
-        if (usePro) {
-            console.warn('Nano Banana Pro failed, falling back to Nano Banana Flash:', error);
-            return generateSceneImage(tutorText, language, false);
-        }
-        throw error;
+    if (['market', 'supermarket', 'store', 'shopping', 'buying', 'fruits', 'vegetables', 'clothing'].some(w => lowerText.includes(w))) {
+        return result('market');
     }
+    if (['airport', 'train station', 'bus stop', 'traveling', 'hotel', 'checking in', 'making a reservation'].some(w => lowerText.includes(w))) {
+        return result('travel');
+    }
+    if (['hospital', 'pharmacy', 'doctor', 'at the doctor'].some(w => lowerText.includes(w))) {
+        return result('hospital');
+    }
+    
+    // Default / City scene
+    return result('city');
 }
 
 /**
