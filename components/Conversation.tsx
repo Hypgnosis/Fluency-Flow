@@ -57,11 +57,16 @@ const getDefaultLanguage = () => {
     return "English";
 };
 
-const Conversation: React.FC = () => {
+interface ConversationProps {
+    defaultNativeLanguage?: string;
+    defaultLearningLanguage?: string;
+}
+
+const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defaultLearningLanguage }) => {
     const { user } = useAuth();
     const [connectionState, setConnectionState] = useState<ConnectionState>('IDLE');
-    const [selectedLanguage, setSelectedLanguage] = useState<string>('Spanish');
-    const [nativeLanguage, setNativeLanguage] = useState<string>(getDefaultLanguage());
+    const [selectedLanguage, setSelectedLanguage] = useState<string>(defaultLearningLanguage || 'Spanish');
+    const [nativeLanguage, setNativeLanguage] = useState<string>(defaultNativeLanguage || getDefaultLanguage());
     const [proficiencyLevel, setProficiencyLevel] = useState<string>('Beginner');
     const [selectedVoice, setSelectedVoice] = useState<string>('Puck');
     const [transcriptionLog, setTranscriptionLog] = useState<TranscriptionEntry[]>([]);

@@ -166,7 +166,7 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className={onClose ? "fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" : "flex items-center justify-center p-4 w-full"}>
             <div className="relative w-full max-w-md bg-[#0f1117] border border-white/10 rounded-3xl shadow-2xl overflow-hidden animate-fade-in">
                 {/* Ambient glow */}
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#FFBF00]/40 to-[#00FF41]/40" />

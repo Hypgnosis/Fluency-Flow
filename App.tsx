@@ -1,12 +1,85 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Conversation from './components/Conversation';
-import { AuthProvider, useAuth } from './components/AuthModal';
+import { AuthProvider, useAuth, AuthModal } from './components/AuthModal';
 import { UserProfile } from './components/UserProfile';
 
-const AppContent: React.FC = () => {
-  const { user } = useAuth();
-  const [showProfile, setShowProfile] = useState(false);
+const OnboardingPage = lazy(() => import('./components/OnboardingPage'));
 
+const AppContent: React.FC = () => {
+  const { user, loading } = useAuth();
+  const [showProfile, setShowProfile] = useState(false);
+  const [onboarded, setOnboarded] = useState(false);
+  const [savedLangs, setSavedLangs] = useState<{ native: string; learning: string } | null>(null);
+
+  // Check onboarding status
+  useEffect(() => {
+    if (user && !user.isAnonymous) {
+      const done = localStorage.getItem('glossos_onboarded');
+      if (done === 'true') {
+        setOnboarded(true);
+        const native = localStorage.getItem('glossos_native_lang') || 'English';
+        const learning = localStorage.getItem('glossos_learning_lang') || 'Spanish';
+        setSavedLangs({ native, learning });
+      }
+    } else if (user && user.isAnonymous) {
+      // Guest users skip onboarding
+      setOnboarded(true);
+    }
+  }, [user]);
+
+  // Loading spinner
+  if (loading) {
+    return (
+      <div className="min-h-screen w-full bg-[#0A0A0B] flex items-center justify-center">
+        <div className="text-center animate-fade-in">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full border-2 border-[#FFBF00]/20 border-t-[#FFBF00] animate-spin" style={{ animationDuration: '1.2s' }} />
+          <p className="text-slate-500 text-xs uppercase tracking-[0.2em]" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
+            Loading GLOSSOS...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Not authenticated — show full-screen registration/login
+  if (!user) {
+    return (
+      <div className="relative min-h-screen w-full bg-[#0A0A0B] overflow-hidden text-[#F5F5F7]">
+        {/* Ambient background */}
+        <div className="ambient-blob ambient-blob-1" />
+        <div className="ambient-blob ambient-blob-2" />
+        <div className="ambient-blob ambient-blob-3" />
+
+        {/* Noise overlay */}
+        <div className="fixed inset-0 opacity-[0.012] pointer-events-none z-0"
+          style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 256 256\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'a\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.65\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23a)\'/%3E%3C/svg%3E")' }}
+        />
+
+        <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-4">
+          {/* Auth Modal rendered inline, not as an overlay */}
+          <AuthModal />
+        </div>
+      </div>
+    );
+  }
+
+  // Authenticated but not onboarded — show onboarding
+  if (!onboarded) {
+    return (
+      <Suspense fallback={
+        <div className="min-h-screen w-full bg-[#0A0A0B] flex items-center justify-center">
+          <div className="w-16 h-16 rounded-full border-2 border-[#FFBF00]/20 border-t-[#FFBF00] animate-spin" style={{ animationDuration: '1.2s' }} />
+        </div>
+      }>
+        <OnboardingPage onComplete={(native, learning) => {
+          setSavedLangs({ native, learning });
+          setOnboarded(true);
+        }} />
+      </Suspense>
+    );
+  }
+
+  // Fully authenticated + onboarded — show main app
   return (
     <div className="relative min-h-screen w-full bg-[#0A0A0B] overflow-hidden text-[#F5F5F7] selection:bg-[#00FF41]/20">
       {/* Clinical Ambient Background Blobs */}
@@ -49,7 +122,7 @@ const AppContent: React.FC = () => {
                 {user.isAnonymous ? 'G' : (user.displayName?.[0] || user.email?.[0] || 'U')}
               </div>
               <span className="text-sm font-medium text-slate-400 group-hover:text-slate-200 hidden sm:inline transition-colors" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                {user.isAnonymous ? 'Guest' : (user.displayName?.split(' ')[0] || 'Profile')}
+                {user.isAnonymous ? 'Guest' : (user.displayName?.split(' ')[0] || user.email?.split('@')[0] || 'Profile')}
               </span>
             </button>
           )}
@@ -57,7 +130,7 @@ const AppContent: React.FC = () => {
 
         {/* Main Workspace */}
         <main className="flex-grow min-h-0 flex flex-col relative">
-          <Conversation />
+          <Conversation defaultNativeLanguage={savedLangs?.native} defaultLearningLanguage={savedLangs?.learning} />
         </main>
 
         {/* Footer */}
