@@ -1,17 +1,15 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { Environment, ContactShadows, Float, MeshDistortMaterial, MeshTransmissionMaterial } from '@react-three/drei';
+import { ContactShadows, Float } from '@react-three/drei';
 import * as THREE from 'three';
 
 // ─── GLOSSOS Color Palette ───
 const COLORS = {
-  terminalGreen: '#00FF41',
-  sacredAmber: '#FFBF00',
-  vellumWhite: '#F5F5F7',
-  idle: '#6366f1',        // Indigo for idle
-  connecting: '#FFBF00',  // Amber for connecting
-  connected: '#00FF41',   // Green for connected
-  error: '#f43f5e',       // Rose for error
+  terminalGreen: new THREE.Color('#00FF41'),
+  sacredAmber: new THREE.Color('#FFBF00'),
+  vellumWhite: new THREE.Color('#F5F5F7'),
+  error: new THREE.Color('#f43f5e'),
+  idle: new THREE.Color('#FFBF00'),
 };
 
 type ConnectionState = 'IDLE' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR';
@@ -21,46 +19,44 @@ interface OrbProps {
   volume: number;
 }
 
-// ─── Inner Core: A distorted glass sphere ───
+// Reusable vectors to avoid allocating inside useFrame
+const _targetScale = new THREE.Vector3();
+const _targetColor = new THREE.Color();
+
+// ─── Inner Core: An icosahedron with premium physical material ───
 function CoreOrb({ connectionState, volume }: OrbProps) {
   const meshRef = useRef<THREE.Mesh>(null!);
+  const matRef = useRef<THREE.MeshPhysicalMaterial>(null!);
   const [hovered, setHover] = useState(false);
-  const materialRef = useRef<any>(null);
 
-  const targetColor = useMemo(() => {
-    switch (connectionState) {
-      case 'CONNECTING': return new THREE.Color(COLORS.connecting);
-      case 'CONNECTED': return new THREE.Color(COLORS.connected);
-      case 'ERROR': return new THREE.Color(COLORS.error);
-      default: return new THREE.Color(COLORS.sacredAmber);
-    }
-  }, [connectionState]);
-
-  useFrame((state, delta) => {
+  useFrame((state) => {
     if (!meshRef.current) return;
 
-    // Smooth scale on hover
-    const baseScale = connectionState === 'CONNECTED' ? 1.0 + volume * 0.4 : 1.0;
-    const targetScale = hovered ? baseScale * 1.15 : baseScale;
-    meshRef.current.scale.lerp(
-      new THREE.Vector3(targetScale, targetScale, targetScale),
-      0.08
-    );
+    // Smooth scale on hover + volume reactivity
+    const baseScale = connectionState === 'CONNECTED' ? 1.0 + volume * 0.35 : 1.0;
+    const s = hovered ? baseScale * 1.15 : baseScale;
+    _targetScale.set(s, s, s);
+    meshRef.current.scale.lerp(_targetScale, 0.08);
 
     // Gentle rotation
-    meshRef.current.rotation.y += delta * 0.15;
+    meshRef.current.rotation.y += 0.004;
     meshRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.3) * 0.1;
 
     // Smooth color transition
-    if (materialRef.current && materialRef.current.color) {
-      materialRef.current.color.lerp(targetColor, 0.05);
+    if (matRef.current) {
+      if (connectionState === 'CONNECTED') {
+        _targetColor.copy(COLORS.terminalGreen);
+      } else if (connectionState === 'CONNECTING') {
+        _targetColor.copy(COLORS.sacredAmber);
+      } else if (connectionState === 'ERROR') {
+        _targetColor.copy(COLORS.error);
+      } else {
+        _targetColor.copy(COLORS.sacredAmber);
+      }
+      matRef.current.color.lerp(_targetColor, 0.04);
+      matRef.current.emissive.lerp(_targetColor, 0.03);
     }
   });
-
-  const distortSpeed = connectionState === 'CONNECTED' ? 3 + volume * 8 : 
-                        connectionState === 'CONNECTING' ? 4 : 2;
-  const distortIntensity = connectionState === 'CONNECTED' ? 0.3 + volume * 0.5 : 
-                           connectionState === 'CONNECTING' ? 0.35 : 0.2;
 
   return (
     <mesh
@@ -68,24 +64,51 @@ function CoreOrb({ connectionState, volume }: OrbProps) {
       onPointerOver={() => { setHover(true); document.body.style.cursor = 'pointer'; }}
       onPointerOut={() => { setHover(false); document.body.style.cursor = 'auto'; }}
     >
-      <icosahedronGeometry args={[1.2, 8]} />
-      <MeshDistortMaterial
-        ref={materialRef}
-        color={COLORS.sacredAmber}
-        roughness={0.15}
-        metalness={0.3}
+      <icosahedronGeometry args={[1.3, 1]} />
+      <meshPhysicalMaterial
+        ref={matRef}
+        color="#FFBF00"
+        emissive="#FFBF00"
+        emissiveIntensity={0.15}
+        roughness={0.18}
+        metalness={0.4}
         clearcoat={1}
         clearcoatRoughness={0.05}
-        distort={distortIntensity}
-        speed={distortSpeed}
         transparent
-        opacity={0.85}
+        opacity={0.88}
       />
     </mesh>
   );
 }
 
-// ─── Outer Wireframe Ring ───
+// ─── Wireframe version of the same shape ───
+function WireframeShell({ connectionState, volume }: OrbProps) {
+  const meshRef = useRef<THREE.Mesh>(null!);
+
+  useFrame((state) => {
+    if (!meshRef.current) return;
+    meshRef.current.rotation.y -= 0.002;
+    meshRef.current.rotation.z = Math.sin(state.clock.elapsedTime * 0.2) * 0.05;
+    const pulse = connectionState === 'CONNECTED'
+      ? 1.6 + volume * 0.2
+      : 1.6 + Math.sin(state.clock.elapsedTime * 0.8) * 0.03;
+    meshRef.current.scale.setScalar(pulse);
+  });
+
+  return (
+    <mesh ref={meshRef}>
+      <icosahedronGeometry args={[1, 1]} />
+      <meshBasicMaterial
+        color={connectionState === 'CONNECTED' ? '#00FF41' : '#FFBF00'}
+        wireframe
+        transparent
+        opacity={0.12}
+      />
+    </mesh>
+  );
+}
+
+// ─── Orbital Ring ───
 function OrbitalRing({ connectionState, volume }: OrbProps) {
   const ringRef = useRef<THREE.Mesh>(null!);
 
@@ -93,80 +116,65 @@ function OrbitalRing({ connectionState, volume }: OrbProps) {
     if (!ringRef.current) return;
     ringRef.current.rotation.x += delta * 0.2;
     ringRef.current.rotation.z += delta * 0.08;
-
-    const pulseScale = connectionState === 'CONNECTED' 
-      ? 1 + Math.sin(state.clock.elapsedTime * 3) * 0.02 + volume * 0.15
-      : 1 + Math.sin(state.clock.elapsedTime * 1.5) * 0.03;
-    ringRef.current.scale.setScalar(pulseScale);
+    const pulse = connectionState === 'CONNECTED'
+      ? 1 + volume * 0.12
+      : 1 + Math.sin(state.clock.elapsedTime * 1.5) * 0.02;
+    ringRef.current.scale.setScalar(pulse);
   });
+
+  const color = connectionState === 'CONNECTED' ? '#00FF41' : '#FFBF00';
 
   return (
     <mesh ref={ringRef}>
-      <torusGeometry args={[1.8, 0.015, 16, 100]} />
-      <meshPhysicalMaterial
-        color={connectionState === 'CONNECTED' ? COLORS.terminalGreen : COLORS.sacredAmber}
-        emissive={connectionState === 'CONNECTED' ? COLORS.terminalGreen : COLORS.sacredAmber}
-        emissiveIntensity={connectionState === 'CONNECTED' ? 0.8 + volume * 2 : 0.3}
-        roughness={0.1}
-        metalness={0.9}
+      <torusGeometry args={[1.9, 0.012, 16, 100]} />
+      <meshBasicMaterial
+        color={color}
         transparent
-        opacity={0.6}
+        opacity={connectionState === 'CONNECTED' ? 0.5 + volume * 0.5 : 0.3}
       />
     </mesh>
   );
 }
 
-// ─── Second Orbital Ring (perpendicular) ───
-function OrbitalRing2({ connectionState, volume }: OrbProps) {
+// ─── Second Ring (perpendicular) ───
+function OrbitalRing2() {
   const ringRef = useRef<THREE.Mesh>(null!);
 
-  useFrame((state, delta) => {
+  useFrame((_, delta) => {
     if (!ringRef.current) return;
-    ringRef.current.rotation.y += delta * 0.15;
-    ringRef.current.rotation.x = Math.PI / 2.5;
+    ringRef.current.rotation.y += delta * 0.12;
   });
 
   return (
-    <mesh ref={ringRef}>
-      <torusGeometry args={[2.1, 0.008, 16, 100]} />
-      <meshPhysicalMaterial
-        color={COLORS.vellumWhite}
-        emissive={COLORS.sacredAmber}
-        emissiveIntensity={0.15}
-        roughness={0.1}
-        metalness={0.9}
-        transparent
-        opacity={0.25}
-      />
+    <mesh ref={ringRef} rotation={[Math.PI / 2.5, 0, 0]}>
+      <torusGeometry args={[2.2, 0.006, 16, 100]} />
+      <meshBasicMaterial color="#F5F5F7" transparent opacity={0.1} />
     </mesh>
   );
 }
 
-// ─── Tiny orbiting particles ───
-function OrbitalParticles({ connectionState, volume }: OrbProps) {
+// ─── Orbiting particles ───
+function Particles({ connectionState, volume }: OrbProps) {
   const groupRef = useRef<THREE.Group>(null!);
-  const particleCount = 6;
+  const count = 5;
 
   useFrame((state) => {
     if (!groupRef.current) return;
-    groupRef.current.rotation.y = state.clock.elapsedTime * 0.3;
-    groupRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.2) * 0.2;
+    groupRef.current.rotation.y = state.clock.elapsedTime * 0.25;
   });
 
   return (
     <group ref={groupRef}>
-      {Array.from({ length: particleCount }).map((_, i) => {
-        const angle = (i / particleCount) * Math.PI * 2;
-        const radius = 2.4;
+      {Array.from({ length: count }).map((_, i) => {
+        const angle = (i / count) * Math.PI * 2;
+        const r = 2.5;
         return (
-          <mesh key={i} position={[Math.cos(angle) * radius, Math.sin(angle * 0.5) * 0.3, Math.sin(angle) * radius]}>
-            <sphereGeometry args={[0.035, 16, 16]} />
-            <meshPhysicalMaterial
-              color={i % 2 === 0 ? COLORS.terminalGreen : COLORS.sacredAmber}
-              emissive={i % 2 === 0 ? COLORS.terminalGreen : COLORS.sacredAmber}
-              emissiveIntensity={connectionState === 'CONNECTED' ? 1 + volume * 3 : 0.5}
-              roughness={0}
-              metalness={1}
+          <mesh key={i} position={[Math.cos(angle) * r, Math.sin(angle * 0.5) * 0.3, Math.sin(angle) * r]}>
+            <sphereGeometry args={[0.04, 8, 8]} />
+            <meshBasicMaterial
+              color={i % 2 === 0 ? '#00FF41' : '#FFBF00'}
+              transparent
+              opacity={connectionState === 'CONNECTED' ? 0.6 + volume * 0.4 : 0.45}
             />
           </mesh>
         );
@@ -175,59 +183,51 @@ function OrbitalParticles({ connectionState, volume }: OrbProps) {
   );
 }
 
-// ─── Connecting State: Animated Spinner Ring ───
-function ConnectingSpinner() {
-  const ringRef = useRef<THREE.Mesh>(null!);
-
+// ─── Connecting spinner arc ───
+function Spinner() {
+  const ref = useRef<THREE.Mesh>(null!);
   useFrame((state) => {
-    if (!ringRef.current) return;
-    ringRef.current.rotation.z = state.clock.elapsedTime * 3;
+    if (!ref.current) return;
+    ref.current.rotation.z = state.clock.elapsedTime * 3;
   });
-
   return (
-    <mesh ref={ringRef}>
-      <torusGeometry args={[2.5, 0.025, 8, 32, Math.PI * 1.5]} />
-      <meshPhysicalMaterial
-        color={COLORS.connecting}
-        emissive={COLORS.connecting}
-        emissiveIntensity={1.5}
-        roughness={0}
-        metalness={1}
-        transparent
-        opacity={0.8}
-      />
+    <mesh ref={ref}>
+      <torusGeometry args={[2.6, 0.02, 8, 32, Math.PI * 1.5]} />
+      <meshBasicMaterial color="#FFBF00" transparent opacity={0.7} />
     </mesh>
   );
 }
 
-// ─── Main 3D Scene ───
+// ─── Main Scene ───
 function Scene({ connectionState, volume }: OrbProps) {
   return (
     <>
-      <Environment preset="night" />
-      <ambientLight intensity={0.3} />
-      <pointLight position={[5, 5, 5]} intensity={0.5} color={COLORS.sacredAmber} />
-      <pointLight position={[-5, -3, -5]} intensity={0.3} color={COLORS.terminalGreen} />
+      {/* Simple lighting — no Environment preset needed */}
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[5, 5, 5]} intensity={0.4} color="#FFBF00" />
+      <directionalLight position={[-4, -2, -3]} intensity={0.2} color="#00FF41" />
+      <pointLight position={[0, 3, 2]} intensity={0.3} color="#fff" />
 
-      <Float 
-        speed={connectionState === 'CONNECTING' ? 3 : 1.5} 
-        rotationIntensity={0.4} 
-        floatIntensity={connectionState === 'CONNECTED' ? 0.5 : 1.2}
+      <Float
+        speed={connectionState === 'CONNECTING' ? 3 : 1.5}
+        rotationIntensity={0.3}
+        floatIntensity={connectionState === 'CONNECTED' ? 0.4 : 1}
       >
         <CoreOrb connectionState={connectionState} volume={volume} />
+        <WireframeShell connectionState={connectionState} volume={volume} />
         <OrbitalRing connectionState={connectionState} volume={volume} />
-        <OrbitalRing2 connectionState={connectionState} volume={volume} />
-        <OrbitalParticles connectionState={connectionState} volume={volume} />
-        {connectionState === 'CONNECTING' && <ConnectingSpinner />}
+        <OrbitalRing2 />
+        <Particles connectionState={connectionState} volume={volume} />
+        {connectionState === 'CONNECTING' && <Spinner />}
       </Float>
 
-      <ContactShadows 
-        position={[0, -2.5, 0]} 
-        opacity={0.4} 
-        scale={12} 
-        blur={3} 
+      <ContactShadows
+        position={[0, -2.5, 0]}
+        opacity={0.35}
+        scale={10}
+        blur={3}
         far={4}
-        color={connectionState === 'CONNECTED' ? COLORS.terminalGreen : COLORS.sacredAmber}
+        color={connectionState === 'CONNECTED' ? '#00FF41' : '#FFBF00'}
       />
     </>
   );
@@ -239,8 +239,8 @@ export default function GlossosOrb({ connectionState = 'IDLE', volume = 0 }: Par
     <div className="glossos-orb-container">
       <Canvas
         camera={{ position: [0, 0, 6], fov: 42 }}
-        dpr={[1, 2]}
-        gl={{ antialias: true, alpha: true }}
+        dpr={[1, 1.5]}
+        gl={{ antialias: true, alpha: true, powerPreference: 'default' }}
         style={{ background: 'transparent' }}
       >
         <Scene connectionState={connectionState} volume={volume} />

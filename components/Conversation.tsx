@@ -444,30 +444,34 @@ const Conversation: React.FC = () => {
             return;
         }
 
-        // Initialize AudioContext synchronously right after user interaction to bypass mobile Safari restrictions
-        try {
-            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            if (!inputAudioContextRef.current) {
-                inputAudioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
-            }
-            if (!outputAudioContextRef.current) {
-                outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
-            }
-        } catch (e) {
-            console.error("Failed to create AudioContext synchronously", e);
-        }
-
         setConnectionState('CONNECTING');
         setError(null);
         setMessageCount(0);
         setAudioChunkCount(0);
         setDebugLog([]); // Clear log on new start
         addDebugLog('Resources cleanup...');
+
+        // IMPORTANT: Clean up old resources FIRST (this closes old AudioContexts)
         cleanupResources();
+
         setTranscriptionLog([]);
         currentInputTranscriptionRef.current = { id: -1, text: '' };
         currentOutputTranscriptionRef.current = { id: -1, text: '' };
         setSessionStartTime(Date.now());
+
+        // NOW create fresh AudioContexts synchronously — still within the user gesture
+        // This MUST happen after cleanup (which nulls the refs) and before any await
+        try {
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            inputAudioContextRef.current = new AudioContextClass();
+            outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
+            addDebugLog(`AudioContexts created (In: ${inputAudioContextRef.current.state}, Out: ${outputAudioContextRef.current.state})`);
+        } catch (e) {
+            console.error('[GLOSSOS] Failed to create AudioContext:', e);
+            setError('Failed to initialize audio. Please try again.');
+            setConnectionState('ERROR');
+            return;
+        }
 
         // Clear any existing timeout
         if (connectionTimeoutRef.current) {
@@ -490,14 +494,10 @@ const Conversation: React.FC = () => {
             addDebugLog('Microphone acquired');
             userMediaStreamRef.current = stream;
 
-            // Ensure contexts exist if they were cleared
-            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            if (!inputAudioContextRef.current) inputAudioContextRef.current = new AudioContextClass({ sampleRate: 16000 });
-            if (!outputAudioContextRef.current) outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
-
-            await inputAudioContextRef.current.resume();
-            await outputAudioContextRef.current.resume();
-            addDebugLog(`AudioContexts resumed (In: ${inputAudioContextRef.current.state}, Out: ${outputAudioContextRef.current.state})`);
+            // Resume contexts (they were created synchronously above, they should still be valid)
+            await inputAudioContextRef.current!.resume();
+            await outputAudioContextRef.current!.resume();
+            addDebugLog(`AudioContexts resumed (In: ${inputAudioContextRef.current!.state}, Out: ${outputAudioContextRef.current!.state})`);
 
             mediaStreamSourceRef.current = inputAudioContextRef.current.createMediaStreamSource(stream);
             // Reduced buffer size to 2048 for lower latency (approx 40-50ms at 48k)
