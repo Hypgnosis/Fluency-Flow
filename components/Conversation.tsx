@@ -98,6 +98,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
     const nextStartTimeRef = useRef<number>(0);
     const outputSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const recognitionRef = useRef<any>(null);
 
     const currentInputTranscriptionRef = useRef({ id: -1, text: '' });
     const currentOutputTranscriptionRef = useRef({ id: -1, text: '' });
@@ -121,6 +122,12 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 URL.revokeObjectURL(entry.audioUrl);
             }
         });
+
+        if (recognitionRef.current) {
+            recognitionRef.current.onend = null;
+            try { recognitionRef.current.stop(); } catch(e) {}
+            recognitionRef.current = null;
+        }
 
         if (userMediaStreamRef.current) {
             userMediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -390,39 +397,59 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                     currentOutputTranscriptionRef.current = { id: -1, text: '' };
                 }
 
-                // Handle audio output from model
-                const modelTurn = message.serverContent?.modelTurn;
-                if (modelTurn?.parts && modelTurn.parts.length > 0) {
-                    for (const part of modelTurn.parts) {
-                        const audioData = part?.inlineData?.data;
-                        if (audioData && outputAudioContextRef.current) {
-                            try {
-                                // Ensure AudioContext is in 'running' state (browsers can auto-suspend)
-                                if (outputAudioContextRef.current.state === 'suspended') {
-                                    console.log('[GLOSSOS] ⚠️ AudioContext suspended, resuming...');
-                                    await outputAudioContextRef.current.resume();
+                if (message.serverContent?.modelTurn) {
+                    const modelTurn = message.serverContent.modelTurn;
+                    if (modelTurn.parts && modelTurn.parts.length > 0) {
+                        for (const part of modelTurn.parts) {
+                            // Extract text part if present
+                            if (part.text) {
+                                const text = part.text;
+                                setTranscriptionLog(prev => {
+                                    const existingEntryIndex = prev.findIndex(e => e.id === currentOutputTranscriptionRef.current.id);
+                                    if (existingEntryIndex === -1 && text) {
+                                        const newId = Date.now();
+                                        currentOutputTranscriptionRef.current = { id: newId, text };
+                                        return [...prev, { id: newId, speaker: 'Tutor', text, isFinal: false }];
+                                    } else if (existingEntryIndex !== -1) {
+                                        const newLog = [...prev];
+                                        const newText = newLog[existingEntryIndex].text + text;
+                                        newLog[existingEntryIndex] = { ...newLog[existingEntryIndex], text: newText };
+                                        currentOutputTranscriptionRef.current.text = newText;
+                                        return newLog;
+                                    }
+                                    return prev;
+                                });
+                            }
+
+                            // Extract and play audio part if present
+                            const audioData = part?.inlineData?.data;
+                            if (audioData && outputAudioContextRef.current) {
+                                try {
+                                    if (outputAudioContextRef.current.state === 'suspended') {
+                                        await outputAudioContextRef.current.resume();
+                                    }
+
+                                    const audioBytes = decode(audioData);
+                                    const audioBuffer = await decodeAudioData(audioBytes, outputAudioContextRef.current, 24000, 1);
+
+                                    const now = outputAudioContextRef.current.currentTime;
+                                    nextStartTimeRef.current = Math.max(nextStartTimeRef.current, now);
+
+                                    const source = outputAudioContextRef.current.createBufferSource();
+                                    source.buffer = audioBuffer;
+                                    source.connect(outputAudioContextRef.current.destination);
+
+                                    source.onended = () => {
+                                        outputSourcesRef.current.delete(source);
+                                    };
+
+                                    source.start(nextStartTimeRef.current);
+                                    nextStartTimeRef.current += audioBuffer.duration;
+                                    setAudioChunkCount(prev => prev + 1);
+                                    outputSourcesRef.current.add(source);
+                                } catch (audioErr) {
+                                    console.error('[GLOSSOS] Audio playback error:', audioErr);
                                 }
-
-                                const audioBytes = decode(audioData);
-                                const audioBuffer = await decodeAudioData(audioBytes, outputAudioContextRef.current, 24000, 1);
-
-                                const now = outputAudioContextRef.current.currentTime;
-                                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, now);
-
-                                const source = outputAudioContextRef.current.createBufferSource();
-                                source.buffer = audioBuffer;
-                                source.connect(outputAudioContextRef.current.destination);
-
-                                source.onended = () => {
-                                    outputSourcesRef.current.delete(source);
-                                };
-
-                                source.start(nextStartTimeRef.current);
-                                nextStartTimeRef.current += audioBuffer.duration;
-                                setAudioChunkCount(prev => prev + 1);
-                                outputSourcesRef.current.add(source);
-                            } catch (audioErr) {
-                                console.error('[GLOSSOS] Audio playback error:', audioErr);
                             }
                         }
                     }
@@ -560,6 +587,67 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         }
                         connectionTimeoutRef.current = null;
                     }, 15000);
+
+                    // Initialize Speech Recognition for User Transcription
+                    try {
+                        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+                        if (SpeechRecognition) {
+                            recognitionRef.current = new SpeechRecognition();
+                            recognitionRef.current.continuous = true;
+                            recognitionRef.current.interimResults = true;
+                            
+                            const langMap: Record<string, string> = {
+                                'English': 'en-US', 'Spanish': 'es-ES', 'French': 'fr-FR', 'German': 'de-DE', 
+                                'Italian': 'it-IT', 'Japanese': 'ja-JP', 'Portuguese': 'pt-BR', 
+                                'Korean': 'ko-KR', 'Chinese': 'zh-CN', 'Russian': 'ru-RU', 'Slovak': 'sk-SK', 
+                                'Yucatec Mayan': 'es-MX'
+                            };
+                            recognitionRef.current.lang = langMap[selectedLanguage] || 'en-US';
+
+                            recognitionRef.current.onresult = (event: any) => {
+                                let interim = '';
+                                let isFinal = false;
+                                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                                    if (event.results[i].isFinal) {
+                                        interim += event.results[i][0].transcript;
+                                        isFinal = true;
+                                    } else {
+                                        interim += event.results[i][0].transcript;
+                                    }
+                                }
+
+                                if (!interim) return;
+
+                                setTranscriptionLog(prev => {
+                                    const existingIndex = prev.findIndex(e => e.id === currentInputTranscriptionRef.current.id);
+                                    if (existingIndex === -1) {
+                                        const newId = Date.now();
+                                        currentInputTranscriptionRef.current = { id: newId, text: interim };
+                                        return [...prev, { id: newId, speaker: 'You', text: interim, isFinal: false }];
+                                    } else {
+                                        const newLog = [...prev];
+                                        newLog[existingIndex] = { ...newLog[existingIndex], text: interim, isFinal };
+                                        currentInputTranscriptionRef.current.text = interim;
+                                        if (isFinal) {
+                                            currentInputTranscriptionRef.current = { id: -1, text: '' };
+                                        }
+                                        return newLog;
+                                    }
+                                });
+                            };
+
+                            recognitionRef.current.onend = () => {
+                                // Restart if it stops abruptly but we are still connected
+                                if (sessionPromiseRef.current) {
+                                    try { recognitionRef.current?.start(); } catch(e) {}
+                                }
+                            };
+
+                            recognitionRef.current.start();
+                        }
+                    } catch (err) {
+                        console.warn('SpeechRecognition not supported or failed to start:', err);
+                    }
                 },
                 onMessage: handleMessage,
                 onError: (e: ErrorEvent) => {
