@@ -16,6 +16,8 @@ Adapted material (each file says what it was ported from and what changed):
 | `services/lensTeacher/phrases.ts` | `spokenphrases/XrLanguageTeacherSpokenPhrases.kt` |
 | `services/speechMatch.ts` | `models/XrLanguageTeacherSpeechMatcher.kt` (simplified) |
 | `components/lens/useLensLesson.ts` | `viewmodels/XrLanguageTeacherLessonController.kt` (behaviour, rewritten for React) |
+| `services/tutorSkills/wikipedia.ts` | `skills/built-in/query-wikipedia/` (search + infobox + per-language truncation) |
+| `services/tutorSkills/registry.ts` | `skills/SkillManager.kt`, `customtasks/agentchat/AgentTools.kt` (skill registry, enable/disable, name matching) |
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in
 compliance with the License. You may obtain a copy of the License at

@@ -1,5 +1,6 @@
 import { encode, pcmTo16kInt16 } from '../utils/audioUtils';
 import { authHeaders } from './genaiClient';
+import type { LiveFunctionResponse } from './tutorSkills/types';
 
 const MODEL_NAME = 'gemini-2.5-flash-native-audio-latest';
 const API_VERSION = 'v1beta';
@@ -28,7 +29,15 @@ export interface GeminiCallbacks {
 export interface LiveSession {
   sendRealtimeInput: (params: { media: { data: string; mimeType: string } }) => void;
   sendText: (text: string) => void;
+  /** Answers a `toolCall` message (Tutor Skills). */
+  sendToolResponse: (functionResponses: LiveFunctionResponse[]) => void;
   close: () => void;
+}
+
+/** Tools for the session (Tutor Skills): Live API function declarations plus prompt guidance. */
+export interface LiveTools {
+  functionDeclarations: Record<string, unknown>[];
+  instructions: string;
 }
 
 /**
@@ -77,7 +86,8 @@ export function startLiveSession(
   userContext?: string,
   proficiencyLevel: string = 'Beginner',
   nativeLanguage: string = 'English',
-  voiceName: string = 'Puck'
+  voiceName: string = 'Puck',
+  tools?: LiveTools
 ): Promise<LiveSession> {
 
   const levelInstructions = {
@@ -165,9 +175,9 @@ This creates an immersive experience where the learner can connect words to real
     ? `You are GLOSSOS, an elite linguistic mastery system. The user wants to practice ${language} (their native language). Focus on advanced vocabulary, public speaking skills, and dialectical mastery. Level: ${proficiencyLevel}. ${selectedLevelInstruction} Keep your responses concise and clinical.${phoneticInstructions}${situationalSceneInstructions}`
     : `You are GLOSSOS, an elite linguistic mastery system. The user is a ${nativeLanguage} speaker acquiring ${language}. Level: ${proficiencyLevel}. ${selectedLevelInstruction} ${immersionRule} Keep your responses concise and precise, and ask questions to maintain conversational cadence. ${openingLine} ${phoneticInstructions}${situationalSceneInstructions}`;
 
-  const systemInstruction = userContext
-    ? `${baseInstruction}\n\n${userContext}`
-    : baseInstruction;
+  const systemInstruction = [baseInstruction, userContext, tools?.instructions]
+    .filter(Boolean)
+    .join('\n\n');
 
   return new Promise<LiveSession>(async (resolve, reject) => {
     try {
@@ -198,6 +208,9 @@ This creates an immersive experience where the learner can connect words to real
             },
             inputAudioTranscription: {},
             outputAudioTranscription: {},
+            ...(tools?.functionDeclarations.length
+              ? { tools: [{ functionDeclarations: tools.functionDeclarations }] }
+              : {}),
           }
         };
         ws.send(JSON.stringify(setupMsg));
@@ -253,6 +266,10 @@ This creates an immersive experience where the learner can connect words to real
               };
               console.log('[GLOSSOS] Sending text to Gemini:', JSON.stringify(msg));
               ws.send(JSON.stringify(msg));
+            },
+            sendToolResponse: (functionResponses: LiveFunctionResponse[]) => {
+              if (ws.readyState !== WebSocket.OPEN || functionResponses.length === 0) return;
+              ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
             },
             close: () => {
               ws.close();

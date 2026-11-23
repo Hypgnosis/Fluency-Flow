@@ -5,7 +5,7 @@ import { TranscriptionEntry } from '../types';
 import { MicrophoneIcon, StopIcon, PlayIcon, ChevronDownIcon } from './icons/Icons';
 import PronunciationScoreCircle from './PronunciationScoreCircle';
 import { useAuth, AuthModal } from './AuthModal';
-import { saveSession, loadUserContext } from '../services/sessionManager';
+import { saveSession, loadUserContext, parseProfileMistakes } from '../services/sessionManager';
 import { PronunciationAnalysisCard } from './PhoneticFeedback';
 import { AudioComparisonPlayer } from './AudioComparisonPlayer';
 import { createMockPhoneticAnalysis } from '../services/phoneticAnalysis';
@@ -14,6 +14,14 @@ import { SceneImage, SceneImageSkeleton } from './SceneImage';
 import { useMobileResilience, resumeAudioContextsIfSuspended } from '../hooks/useMobileResilience';
 import { useWebSocketSession, MAX_RECONNECT_ATTEMPTS } from '../hooks/useWebSocketSession';
 import { glossosLog, glossosWarn, glossosError, mobileLog } from '../utils/debugLog';
+import { SkillsPanel } from './skills/SkillsPanel';
+import { SkillAttachmentView } from './skills/SkillAttachmentView';
+import {
+    buildFunctionDeclarations, buildSkillsInstruction, enabledSkills, executeToolCalls, loadSkillPrefs, newReviewMemory,
+    runTurnReview, saveSkillPrefs, SkillPrefs,
+} from '../services/tutorSkills/registry';
+import { defaultSkillServices, describeAttachment } from '../services/tutorSkills/services';
+import type { LiveFunctionCall, SkillAttachment, SkillContext, TutorSkill } from '../services/tutorSkills/types';
 
 const GlossosOrb = lazy(() => import('./GlossosOrb'));
 const LensTeacher = lazy(() => import('./lens/LensTeacher'));
@@ -86,6 +94,12 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
     // Lens mode (port of Google AI Edge Gallery's XR Language Teacher)
     const [isVisionMode, setIsVisionMode] = useState(false);
     const [sceneImagesEnabled, setSceneImagesEnabled] = useState(true);
+    // Tutor Skills (port of Google AI Edge Gallery's Agent Skills onto Live API function calling)
+    const [skillPrefs, setSkillPrefs] = useState<SkillPrefs>(() => loadSkillPrefs());
+    const [showSkills, setShowSkills] = useState(false);
+    const activeSkillsRef = useRef<{ skills: TutorSkill[]; ctx: SkillContext } | null>(null);
+    const reviewMemoryRef = useRef(newReviewMemory());
+    const profileMistakesRef = useRef<{ incorrect: string; correct: string }[]>([]);
     const [messageCount, setMessageCount] = useState(0);
     const [audioChunkCount, setAudioChunkCount] = useState(0);
     const [debugLog, setDebugLog] = useState<string[]>([]);
@@ -313,6 +327,34 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
     }, [sceneImagesEnabled, selectedLanguage]);
 
+    /** Adds what a skill showed (mistake noted, word saved, card...) to the conversation. */
+    const appendAttachments = useCallback((attachments: SkillAttachment[]) => {
+        if (attachments.length === 0) return;
+        const now = Date.now();
+        setTranscriptionLog(prev => [
+            ...prev,
+            ...attachments.map((attachment, i) => ({
+                id: now + (i + 1) / 1000 + Math.random() / 1e6,
+                speaker: 'Tutor' as const,
+                text: describeAttachment(attachment),
+                isFinal: true,
+                timestamp: now,
+                attachment,
+            })),
+        ]);
+    }, []);
+
+    /** Runs the tutor's live tool calls (e.g. Wikipedia), answers them, and shows their results. */
+    const handleToolCall = useCallback(async (calls: LiveFunctionCall[]) => {
+        const active = activeSkillsRef.current;
+        if (!active || calls.length === 0) return;
+        addDebugLog(`Tool call: ${calls.map(c => c.name).join(', ')}`);
+        const liveSkills = active.skills.filter(s => s.mode === 'live');
+        const { responses, attachments } = await executeToolCalls(calls, liveSkills, active.ctx);
+        sessionPromiseRef.current?.then(session => session.sendToolResponse(responses)).catch(glossosError);
+        appendAttachments(attachments);
+    }, [addDebugLog, appendAttachments]);
+
     const handleMessage = useCallback(async (message: any) => {
         try {
             // Log all messages for debugging
@@ -332,6 +374,15 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             if ((message as any).setupComplete) {
                 addDebugLog('Setup Complete! Session Ready');
                 glossosLog('Setup complete — session is ready');
+                return;
+            }
+
+            if (message.toolCall) {
+                handleToolCall(message.toolCall.functionCalls ?? []);
+                return;
+            }
+            if (message.toolCallCancellation) {
+                glossosLog('Tool calls cancelled:', message.toolCallCancellation.ids);
                 return;
             }
 
@@ -433,6 +484,20 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         handleGenerateSceneImage(outputEntryId, outputText);
                     }
 
+                    // Tutor Skills: review the finished exchange in the background
+                    // (mistake memory, saved words, phrase cards, progress tracking).
+                    const active = activeSkillsRef.current;
+                    if (active && outputText) {
+                        runTurnReview({
+                            learnerText: currentInputTranscriptionRef.current.text,
+                            tutorText: outputText,
+                            skills: active.skills,
+                            ctx: active.ctx,
+                            profileMistakes: profileMistakesRef.current,
+                            memory: reviewMemoryRef.current,
+                        }).then(appendAttachments);
+                    }
+
                     currentInputTranscriptionRef.current = { id: -1, text: '' };
                     currentOutputTranscriptionRef.current = { id: -1, text: '' };
                 }
@@ -493,7 +558,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         } catch (msgErr) {
             glossosError('Error handling server message:', msgErr);
         }
-    }, [addDebugLog, handleGenerateSceneImage]);
+    }, [addDebugLog, handleGenerateSceneImage, handleToolCall, appendAttachments]);
 
     const startConversation = async () => {
         addDebugLog('Start clicked');
@@ -645,7 +710,18 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
             addDebugLog('Connecting to Gemini...');
             // ─── MOBILE RESILIENCE: Store params for auto-reconnect ───
-            storeSessionParams({ language: selectedLanguage, userContext: userContext || '', proficiencyLevel, nativeLanguage, voiceName: selectedVoice });
+            // ─── Tutor Skills: declare the enabled tools for this session ───
+            const skills = enabledSkills(skillPrefs);
+            reviewMemoryRef.current = newReviewMemory();
+            profileMistakesRef.current = parseProfileMistakes(userContext || '');
+            activeSkillsRef.current = {
+                skills,
+                ctx: { nativeLanguage, learnLanguage: selectedLanguage, level: proficiencyLevel, services: defaultSkillServices },
+            };
+            const tools = skills.length
+                ? { functionDeclarations: buildFunctionDeclarations(skills), instructions: buildSkillsInstruction(skills) }
+                : undefined;
+            storeSessionParams({ language: selectedLanguage, userContext: userContext || '', proficiencyLevel, nativeLanguage, voiceName: selectedVoice, tools });
 
             // ─── Create onClose handler with reconnection logic (from hook) ───
             const handleWsClose = createOnCloseHandler({
@@ -719,7 +795,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                     cleanupResources();
                 },
                 onClose: handleWsClose,
-            }, selectedLanguage, userContext, proficiencyLevel, nativeLanguage, selectedVoice);
+            }, selectedLanguage, userContext, proficiencyLevel, nativeLanguage, selectedVoice, tools);
 
             // Handle session promise for audio sending
             sessionPromiseRef.current.then(() => {
@@ -824,6 +900,20 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                     </svg>
                                 )}
                                 <span className="hidden sm:inline">{isVisionMode ? 'Lens' : 'Voice'}</span>
+                            </button>
+
+                            {/* Tutor Skills */}
+                            <button
+                                onClick={() => setShowSkills(true)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-semibold bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08] hover:text-slate-200"
+                                title="Tutor skills: what your voice tutor can do while you talk"
+                                style={{ fontFamily: "'IBM Plex Mono', monospace" }}
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437" />
+                                </svg>
+                                <span className="hidden sm:inline">Skills</span>
+                                <span className="text-[10px] text-[#00FF41]">{enabledSkills(skillPrefs).length}</span>
                             </button>
 
                             {/* Scene Images Toggle */}
@@ -1025,7 +1115,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         )}
 
                         {/* Chat Messages */}
-                        {transcriptionLog.map(entry => (
+                        {transcriptionLog.map(entry => entry.attachment ? (
+                            <div key={entry.id} className="w-full flex justify-start animate-slide-up">
+                                <SkillAttachmentView attachment={entry.attachment} learnLanguage={selectedLanguage} />
+                            </div>
+                        ) : (
                             <div key={entry.id} className="w-full space-y-3 animate-slide-up">
                                 <div className={`flex flex-col ${entry.speaker === 'You' ? 'items-end' : 'items-start'}`}>
                                     <div className={`max-w-[88%] sm:max-w-[80%] md:max-w-[75%] relative`}>
@@ -1297,6 +1391,16 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 </div>
                 )}
             </div>
+
+            {/* Tutor Skills panel */}
+            {showSkills && (
+                <SkillsPanel
+                    prefs={skillPrefs}
+                    locked={isConversationActive}
+                    onChange={prefs => { setSkillPrefs(prefs); saveSkillPrefs(prefs); }}
+                    onClose={() => setShowSkills(false)}
+                />
+            )}
 
             {/* Auth Modal */}
             {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}

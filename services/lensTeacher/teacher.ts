@@ -11,7 +11,7 @@
 
 import type { PersonaId, VocabCard } from '../../types/lens';
 import {
-    Content, FAST_MODEL, GenAiError, TEXT_MODEL, generateText, inlineImage, lowLatencyThinking, streamText,
+    Content, FAST_MODELS, TEXT_MODELS, generateWithFallback, inlineImage, lowLatencyThinking, streamWithFallback,
 } from '../genaiClient';
 import { buildPass1Prompt, buildPass2Prompt, buildSystemPrompt, PASS2_RESPONSE_SCHEMA } from './prompts';
 import { extractStreamingReply, parsePass2Output, sanitizeVocabCard } from './dialogue';
@@ -59,7 +59,8 @@ export async function runTeacherTurn(req: TeacherTurnRequest): Promise<TeacherTu
 
     let raw = '';
     let lastReply = '';
-    const stream = (model: string) => streamText({
+    // Falls back to the next model when one is overloaded before it starts streaming.
+    for await (const chunk of streamWithFallback(TEXT_MODELS, model => ({
         model,
         systemInstruction: buildSystemPrompt(req.persona, req.nativeLanguage, req.learnLanguage, req.level),
         contents: [...req.history, userTurn],
@@ -70,26 +71,14 @@ export async function runTeacherTurn(req: TeacherTurnRequest): Promise<TeacherTu
             thinkingConfig: lowLatencyThinking(model),
         },
         signal: req.signal,
-    });
-    const consume = async (model: string) => {
-        for await (const chunk of stream(model)) {
-            raw += chunk;
-            const reply = extractStreamingReply(raw);
-            if (reply !== lastReply) {
-                lastReply = reply;
-                req.onReply?.(reply);
-            }
+        timeoutMs: 25_000,
+    }))) {
+        raw += chunk;
+        const reply = extractStreamingReply(raw);
+        if (reply !== lastReply) {
+            lastReply = reply;
+            req.onReply?.(reply);
         }
-    };
-
-    try {
-        await consume(TEXT_MODEL);
-    } catch (err) {
-        // The quality model is sometimes overloaded (503). If nothing streamed yet, use the fast model.
-        const overloaded = err instanceof GenAiError && (err.status === 503 || err.status === 500);
-        if (!overloaded || raw || TEXT_MODEL === FAST_MODEL) throw err;
-        console.warn(`[GLOSSOS-LENS] ${TEXT_MODEL} unavailable (${err.status}); falling back to ${FAST_MODEL}`);
-        await consume(FAST_MODEL);
     }
 
     const replyWithTags = extractStreamingReply(raw).trim();
@@ -117,18 +106,19 @@ export async function extractVocabCard(opts: {
     });
 
     const attempt = async (withSchema: boolean) => {
-        const raw = await generateText({
-            model: FAST_MODEL,
+        const raw = await generateWithFallback(FAST_MODELS, model => ({
+            model,
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: {
                 temperature: 0,
                 maxOutputTokens: 512,
                 responseMimeType: 'application/json',
                 ...(withSchema ? { responseSchema: PASS2_RESPONSE_SCHEMA } : {}),
-                thinkingConfig: lowLatencyThinking(FAST_MODEL),
+                thinkingConfig: lowLatencyThinking(model),
             },
             signal: opts.signal,
-        });
+            timeoutMs: 20_000,
+        }));
         const card = parsePass2Output(raw);
         return card ? sanitizeVocabCard(card, opts.replyWithTags) : null;
     };

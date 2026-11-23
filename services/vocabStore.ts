@@ -10,7 +10,7 @@
  * "save, then immediately un-save" lands in the right order.
  */
 
-import { collection, deleteDoc, doc, getDocs, setDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import type { LensTurn, SavedWord, SrsState, VocabCard } from '../types/lens';
 import { newSrsState } from './srs';
@@ -70,6 +70,12 @@ export function findSaved(words: SavedWord[], learnLanguage: string, word: strin
     return words.find(w => w.learnLanguage === learnLanguage && isSameVocabularyWord(w.word, word));
 }
 
+async function readSaved(id: string): Promise<SavedWord | undefined> {
+    if (!useFirestore()) return readLocal().find(w => w.id === id);
+    const snap = await getDoc(doc(db!, `users/${uid()}/vocabulary/${id}`));
+    return snap.exists() ? (snap.data() as SavedWord) : undefined;
+}
+
 /**
  * Saves a card. An existing entry keeps its text and study progress; only a missing image is filled in.
  */
@@ -78,7 +84,8 @@ export function saveWord(
     ctx: { learnLanguage: string; nativeLanguage: string; imageDataUrl?: string; existing?: SavedWord },
 ): Promise<SavedWord> {
     return enqueue(async () => {
-        const base: SavedWord = ctx.existing ?? {
+        const existing = ctx.existing ?? await readSaved(wordId(ctx.learnLanguage, card.word));
+        const base: SavedWord = existing ?? {
             ...card,
             id: wordId(ctx.learnLanguage, card.word),
             learnLanguage: ctx.learnLanguage,

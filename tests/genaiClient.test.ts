@@ -2,7 +2,8 @@ const fakeAuth = vi.hoisted(() => ({ currentUser: null as null | { getIdToken: (
 vi.mock('../services/firebase', () => ({ auth: fakeAuth, db: null, isFirebaseConfigured: false }));
 
 import {
-    _setGenaiConfig, generateText, lowLatencyThinking, splitSseEvents, streamText, textFromResponse,
+    _setGenaiConfig, generateText, generateWithFallback, lowLatencyThinking, splitSseEvents, streamText, streamWithFallback,
+    textFromResponse, isRetryableModelError, GenAiError,
 } from '../services/genaiClient';
 import { _setLiveConfig, resolveLiveWebSocketUrl } from '../services/geminiService';
 
@@ -134,3 +135,70 @@ describe('resolveLiveWebSocketUrl', () => {
         expect(await resolveLiveWebSocketUrl(vi.fn())).toBe('wss://proxy.example/ws');
     });
 });
+
+describe('model fallback', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const ok = (text: string) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+    const overloaded = () => new Response(JSON.stringify({ error: { message: 'high demand' } }), { status: 503 });
+
+    it('classifies retryable errors', () => {
+        expect(isRetryableModelError(new GenAiError('x', 503))).toBe(true);
+        expect(isRetryableModelError(new GenAiError('x', 404))).toBe(true);
+        expect(isRetryableModelError(new GenAiError('x', 400))).toBe(false);
+        expect(isRetryableModelError(new Error('x'))).toBe(false);
+    });
+
+    it('moves to the next model when one is overloaded, with per-model settings', async () => {
+        const fetchMock = vi.fn().mockResolvedValueOnce(overloaded()).mockResolvedValueOnce(ok('hola'));
+        vi.stubGlobal('fetch', fetchMock);
+        const build = vi.fn((model: string) => ({ model, contents: [], generationConfig: { thinkingConfig: lowLatencyThinking(model) } }));
+        await expect(generateWithFallback(['gemini-3.8-flash', 'gemini-2.5-flash'], build)).resolves.toBe('hola');
+        expect(fetchMock.mock.calls[1][0]).toContain('gemini-2.5-flash:generateContent');
+        expect(JSON.parse(fetchMock.mock.calls[1][1].body).generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 });
+    });
+
+    it('does not retry other errors, and rethrows when every model fails', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: 'bad request' } }), { status: 400 })));
+        await expect(generateWithFallback(['a', 'b'], m => ({ model: m, contents: [] }))).rejects.toThrow('bad request');
+        vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => overloaded()));
+        await expect(generateWithFallback(['a', 'b'], m => ({ model: m, contents: [] }))).rejects.toThrow('high demand');
+    });
+
+    it('streams from the fallback when the first model fails before any text', async () => {
+        const sse = new Response('data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) + '\n\n', { status: 200 });
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(overloaded()).mockResolvedValueOnce(sse));
+        const out: string[] = [];
+        for await (const t of streamWithFallback(['a', 'b'], m => ({ model: m, contents: [] }))) out.push(t);
+        expect(out).toEqual(['ok']);
+    });
+});
+
+describe('timeouts', () => {
+    afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+    it('turns a stalled model into a retryable 504 and falls back', async () => {
+        const hang = (_url: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+        const fetchMock = vi.fn().mockImplementationOnce(hang).mockResolvedValueOnce(
+            new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'rescued' }] } }] }), { status: 200 }));
+        vi.stubGlobal('fetch', fetchMock);
+        const out = await generateWithFallback(['slow-model', 'gemini-2.5-flash'], model => ({ model, contents: [], timeoutMs: 30 }));
+        expect(out).toBe('rescued');
+        await expect(generateText({ model: 'slow-model', contents: [], timeoutMs: 20 })).rejects.toThrow();
+    });
+
+    it('lets the caller cancel without reporting a timeout', async () => {
+        const controller = new AbortController();
+        // Like real fetch: reject at once if the signal is already aborted, otherwise when it aborts.
+        vi.stubGlobal('fetch', vi.fn().mockImplementation((_u: string, init: RequestInit) => new Promise((_, reject) => {
+            const abort = () => reject(new DOMException('aborted', 'AbortError'));
+            if (init.signal?.aborted) abort();
+            else init.signal?.addEventListener('abort', abort);
+        })));
+        const pending = generateText({ model: 'm', contents: [], timeoutMs: 10_000, signal: controller.signal });
+        controller.abort();
+        await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    });
+});
+

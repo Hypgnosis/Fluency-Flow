@@ -15,6 +15,14 @@ const DIRECT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 export const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash';
 /** Cheap, fast model for extraction tasks. Override with GEMINI_FAST_MODEL. */
 export const FAST_MODEL = process.env.GEMINI_FAST_MODEL || 'gemini-3.5-flash-lite';
+/** Last-resort model when the newer ones are overloaded (available to existing 2.5 users). */
+export const FALLBACK_MODEL = 'gemini-2.5-flash';
+
+const unique = (models: string[]) => [...new Set(models.filter(Boolean))];
+/** Try order for quality tasks (teacher replies). */
+export const TEXT_MODELS = unique([TEXT_MODEL, FAST_MODEL, FALLBACK_MODEL]);
+/** Try order for fast tasks (extraction, reviews). */
+export const FAST_MODELS = unique([FAST_MODEL, FALLBACK_MODEL]);
 
 export interface Part {
     text?: string;
@@ -33,6 +41,11 @@ export interface GenerateRequest {
     systemInstruction?: string;
     generationConfig?: Record<string, unknown>;
     signal?: AbortSignal;
+    /**
+     * Give up on this model if it has not responded within this time (overloaded models sometimes
+     * stall instead of answering 503). A timeout throws GenAiError 504, which fallbacks retry.
+     */
+    timeoutMs?: number;
 }
 
 export class GenAiError extends Error {
@@ -129,17 +142,50 @@ async function errorFrom(res: Response): Promise<GenAiError> {
     return new GenAiError(String(message), res.status);
 }
 
+/** An abort signal that fires on the caller's signal or after `timeoutMs`. */
+function withDeadline(req: GenerateRequest) {
+    if (!req.timeoutMs) return { signal: req.signal, timedOut: () => false, clear: () => undefined };
+    const controller = new AbortController();
+    let fired = false;
+    const timer = setTimeout(() => { fired = true; controller.abort(); }, req.timeoutMs);
+    if (req.signal?.aborted) controller.abort();
+    else req.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+    return { signal: controller.signal, timedOut: () => fired, clear: () => clearTimeout(timer) };
+}
+
+function timeoutError(req: GenerateRequest): GenAiError {
+    return new GenAiError(`${req.model} did not respond within ${Math.round((req.timeoutMs ?? 0) / 1000)} s`, 504);
+}
+
 export async function generateText(req: GenerateRequest): Promise<string> {
-    const [url, init] = await buildRequest('generate', req);
-    const res = await fetch(url, init);
-    if (!res.ok) throw await errorFrom(res);
-    return textFromResponse(await res.json());
+    const deadline = withDeadline(req);
+    const [url, init] = await buildRequest('generate', { ...req, signal: deadline.signal });
+    try {
+        const res = await fetch(url, init);
+        if (!res.ok) throw await errorFrom(res);
+        return textFromResponse(await res.json());
+    } catch (err) {
+        if (deadline.timedOut()) throw timeoutError(req);
+        throw err;
+    } finally {
+        deadline.clear();
+    }
 }
 
 /** Streams the response text, yielding each new chunk as it arrives. */
 export async function* streamText(req: GenerateRequest): AsyncGenerator<string> {
-    const [url, init] = await buildRequest('stream', req);
-    const res = await fetch(url, init);
+    // The deadline covers the wait for the response to start; once it streams, it may take its time.
+    const deadline = withDeadline(req);
+    const [url, init] = await buildRequest('stream', { ...req, signal: deadline.signal });
+    let res: Response;
+    try {
+        res = await fetch(url, init);
+    } catch (err) {
+        if (deadline.timedOut()) throw timeoutError(req);
+        throw err;
+    } finally {
+        deadline.clear();
+    }
     if (!res.ok || !res.body) throw await errorFrom(res);
 
     const reader = res.body.getReader();
@@ -170,4 +216,47 @@ export function inlineImage(dataUrl: string): Part {
     const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
     if (!match) throw new GenAiError('Invalid image data');
     return { inlineData: { mimeType: match[1], data: match[2] } };
+}
+
+/** Whether trying another model could help: overloaded (503/500/504) or unavailable (404). */
+export function isRetryableModelError(err: unknown): boolean {
+    return err instanceof GenAiError && [404, 500, 503, 504].includes(err.status ?? 0);
+}
+
+/**
+ * Calls `generateText` with each model in turn until one answers. `build` creates the request for a
+ * model (thinking settings differ between model families).
+ */
+export async function generateWithFallback(models: string[], build: (model: string) => GenerateRequest): Promise<string> {
+    let lastError: unknown;
+    for (const model of models) {
+        try {
+            return await generateText(build(model));
+        } catch (err) {
+            lastError = err;
+            if (!isRetryableModelError(err)) throw err;
+            console.warn(`[GLOSSOS] ${model} unavailable (${(err as GenAiError).status}), trying the next model`);
+        }
+    }
+    throw lastError;
+}
+
+/** Streaming version: falls back only if a model fails before sending any text. */
+export async function* streamWithFallback(models: string[], build: (model: string) => GenerateRequest): AsyncGenerator<string> {
+    let lastError: unknown;
+    for (const model of models) {
+        let sentAny = false;
+        try {
+            for await (const chunk of streamText(build(model))) {
+                sentAny = true;
+                yield chunk;
+            }
+            return;
+        } catch (err) {
+            lastError = err;
+            if (sentAny || !isRetryableModelError(err)) throw err;
+            console.warn(`[GLOSSOS] ${model} unavailable (${(err as GenAiError).status}), trying the next model`);
+        }
+    }
+    throw lastError;
 }

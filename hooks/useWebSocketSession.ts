@@ -8,7 +8,7 @@
  * - Proper cleanup of keepalive on close/unmount
  */
 import { useRef, useCallback } from 'react';
-import { startLiveSession, LiveSession, GeminiCallbacks } from '../services/geminiService';
+import { startLiveSession, LiveSession, LiveTools, GeminiCallbacks } from '../services/geminiService';
 import { mobileLog, glossosLog, glossosError } from '../utils/debugLog';
 
 // ─── Constants (no more magic numbers) ───────────────────────
@@ -33,6 +33,8 @@ export interface SessionParams {
   proficiencyLevel: string;
   nativeLanguage: string;
   voiceName: string;
+  /** Tutor Skills declared for the session (re-sent on reconnect). */
+  tools?: LiveTools;
 }
 
 export interface UseWebSocketSessionReturn {
@@ -167,7 +169,7 @@ export function useWebSocketSession(): UseWebSocketSessionReturn {
           deps.cleanupResources();
         },
         onClose: handleWsClose,
-      }, params.language, params.userContext, params.proficiencyLevel, params.nativeLanguage, params.voiceName);
+      }, params.language, params.userContext, params.proficiencyLevel, params.nativeLanguage, params.voiceName, params.tools);
     }, delayMs);
   }, [startKeepalive]);
 

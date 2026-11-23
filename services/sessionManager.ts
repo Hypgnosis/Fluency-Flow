@@ -130,7 +130,7 @@ export async function loadRecentSessions(
 }
 
 /**
- * Logs a mistake made by the user
+ * Logs a mistake made by the user. Resolves to true when it was written.
  */
 export async function logMistake(
     word: string,
@@ -138,10 +138,10 @@ export async function logMistake(
     correctForm: string,
     category: MistakeData['category'],
     language: string
-): Promise<void> {
-    if (!auth || !db) return;
+): Promise<boolean> {
+    if (!auth || !db) return false;
     const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!userId) return false;
 
     try {
         // Check if this mistake already exists
@@ -174,8 +174,34 @@ export async function logMistake(
                 language
             });
         }
+        return true;
     } catch (error) {
         console.error('Error logging mistake:', error);
+        return false;
+    }
+}
+
+/**
+ * Marks the unresolved mistakes with this incorrect form as resolved (used by the tutor's
+ * mark_mistake_fixed skill). Resolves to true when at least one was found.
+ */
+export async function resolveMistakeByForm(incorrectForm: string, language: string): Promise<boolean> {
+    if (!auth || !db) return false;
+    const userId = auth.currentUser?.uid;
+    if (!userId) return false;
+
+    try {
+        const matches = await getDocs(query(
+            collection(db, `users/${userId}/mistakes`),
+            where('incorrectForm', '==', incorrectForm),
+            where('language', '==', language),
+            where('resolved', '==', false)
+        ));
+        await Promise.all(matches.docs.map(d => updateDoc(d.ref, { resolved: true })));
+        return !matches.empty;
+    } catch (error) {
+        console.error('Error resolving mistake:', error);
+        return false;
     }
 }
 
@@ -232,6 +258,13 @@ Please adapt your teaching to address these recurring mistakes naturally during 
         console.error('[GLOSSOS-DB] Error loading user context:', error);
         return '';
     }
+}
+
+/**
+ * Reads the mistakes back out of the LEARNER PROFILE text built by loadUserContext().
+ */
+export function parseProfileMistakes(context: string): { incorrect: string; correct: string }[] {
+    return [...context.matchAll(/^- "(.+?)" → "(.+?)" \(/gm)].map(m => ({ incorrect: m[1], correct: m[2] }));
 }
 
 /**
