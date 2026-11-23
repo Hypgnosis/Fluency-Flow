@@ -13,11 +13,12 @@ export default defineConfig(({ mode }) => {
 
   return {
     server: {
-      port: 3000,
+      port: 3001,
       host: '0.0.0.0',
     },
     plugins: [react(), tailwindcss()],
     define: {
+      'process.env.VITE_WS_PROXY_URL': JSON.stringify(getEnv('VITE_WS_PROXY_URL')),
       'process.env.API_KEY': JSON.stringify(getEnv('GEMINI_API_KEY')),
       'process.env.GEMINI_API_KEY': JSON.stringify(getEnv('GEMINI_API_KEY')),
       'process.env.FIREBASE_API_KEY': JSON.stringify(getEnv('FIREBASE_API_KEY')),
@@ -31,6 +32,23 @@ export default defineConfig(({ mode }) => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       }
-    }
+    },
+    // ─── VITEST CONFIGURATION ───
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      setupFiles: ['./tests/setup.ts'],
+      include: ['./tests/**/*.test.{ts,tsx}'],
+      coverage: {
+        provider: 'v8',
+        include: ['components/**', 'services/**', 'utils/**'],
+        thresholds: {
+          lines: 80,
+          functions: 80,
+          branches: 80,
+          statements: 80,
+        },
+      },
+    },
   };
 });

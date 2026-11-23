@@ -1,0 +1,15 @@
+{
+  "name": "glossos-ws-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebSocket proxy for GLOSSOS — keeps the Gemini API key server-side",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "dotenv": "^16.4.0"
+  }
+}

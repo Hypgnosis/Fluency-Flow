@@ -14,6 +14,9 @@ import { VocabularyCardDisplay, VocabularyCollection } from './VocabularyCard';
 import { analyzeImageForVocabulary } from '../services/visionService';
 import { shouldGenerateImage, generateSceneImage } from '../services/imageGenerationService';
 import { SceneImage, SceneImageSkeleton } from './SceneImage';
+import { useMobileResilience, resumeAudioContextsIfSuspended } from '../hooks/useMobileResilience';
+import { useWebSocketSession, MAX_RECONNECT_ATTEMPTS } from '../hooks/useWebSocketSession';
+import { glossosLog, glossosWarn, glossosError, mobileLog } from '../utils/debugLog';
 
 const GlossosOrb = lazy(() => import('./GlossosOrb'));
 
@@ -40,6 +43,13 @@ const LEVEL_COLORS: Record<string, { accent: string; glow: string; text: string 
     'Intermediate': { accent: '#00FF41', glow: 'from-[#00FF41]/10 via-transparent to-transparent', text: 'text-[#00FF41]' },
     'Advanced': { accent: '#FFBF00', glow: 'from-[#FFBF00]/15 via-transparent to-transparent', text: 'text-[#FFBF00]' },
 };
+
+/** Audio buffer size for ScriptProcessor/WorkletNode (lower = less latency) */
+const AUDIO_BUFFER_SIZE = 2048;
+/** Output AudioContext sample rate — matches Gemini's 24kHz output */
+const OUTPUT_SAMPLE_RATE = 24000;
+/** How long to wait for first AI response before showing a hint (ms) */
+const CONNECTION_TIMEOUT_MS = 15000;
 
 const getDefaultLanguage = () => {
     if (typeof navigator === 'undefined') return 'English';
@@ -89,14 +99,27 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         setDebugLog(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] ${msg}`]);
     }, []);
 
-    const sessionPromiseRef = useRef<ReturnType<typeof startLiveSession> | null>(null);
+    // ─── WebSocket session hook (keepalive, reconnect, session params) ───
+    const {
+        sessionPromiseRef,
+        isIntentionalStopRef,
+        reconnectAttemptsRef,
+        lastStartParamsRef,
+        startKeepalive,
+        stopKeepalive,
+        storeSessionParams,
+        markIntentionalStop,
+        createOnCloseHandler,
+    } = useWebSocketSession();
+
     const inputAudioContextRef = useRef<AudioContext | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+    const scriptProcessorRef = useRef<ScriptProcessorNode | AudioWorkletNode | null>(null);
     const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const userMediaStreamRef = useRef<MediaStream | null>(null);
     const nextStartTimeRef = useRef<number>(0);
     const outputSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    const outputAnalyserRef = useRef<AnalyserNode | null>(null);
     const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const recognitionRef = useRef<any>(null);
 
@@ -104,9 +127,14 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
     const currentOutputTranscriptionRef = useRef({ id: -1, text: '' });
     const currentAudioChunksRef = useRef<Float32Array[]>([]);
     const logContainerRef = useRef<HTMLDivElement>(null);
+    const latestTranscriptionLogRef = useRef<TranscriptionEntry[]>([]);
+    const sessionStartTimeRef = useRef<number>(0);
+    const isSavingRef = useRef<boolean>(false);
+    const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // Auto-scroll to bottom
     useEffect(() => {
+        latestTranscriptionLogRef.current = transcriptionLog;
         if (logContainerRef.current) {
             const scrollOptions: ScrollToOptions = {
                 top: logContainerRef.current.scrollHeight,
@@ -116,18 +144,38 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
     }, [transcriptionLog]);
 
+    // ─── MOBILE RESILIENCE: Visibility resume + Wake Lock (extracted to hook) ───
+    useMobileResilience({
+        connectionState,
+        inputAudioContextRef,
+        outputAudioContextRef,
+        nextStartTimeRef,
+        addDebugLog,
+    });
+
     const cleanupResources = useCallback(() => {
-        transcriptionLog.forEach(entry => {
+        // Use ref instead of state to avoid stale closure — state captured
+        // by useCallback would be outdated if transcriptionLog changed
+        latestTranscriptionLogRef.current.forEach(entry => {
             if (entry.audioUrl) {
                 URL.revokeObjectURL(entry.audioUrl);
             }
         });
 
+        // Stop any playback audio
+        if (playbackAudioRef.current) {
+            playbackAudioRef.current.pause();
+            playbackAudioRef.current = null;
+        }
+
         if (recognitionRef.current) {
             recognitionRef.current.onend = null;
-            try { recognitionRef.current.stop(); } catch(e) {}
+            try { recognitionRef.current.stop(); } catch(e) { glossosError('Recognition stop failed:', e); }
             recognitionRef.current = null;
         }
+
+        // ─── MOBILE RESILIENCE: Clear keepalive interval ───
+        stopKeepalive();
 
         if (userMediaStreamRef.current) {
             userMediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -144,11 +192,15 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
 
         if (inputAudioContextRef.current && inputAudioContextRef.current.state !== 'closed') {
-            inputAudioContextRef.current.close().catch(console.error);
+            inputAudioContextRef.current.close().catch(e => glossosError('Failed to close input AudioContext:', e));
             inputAudioContextRef.current = null;
         }
+        if (outputAnalyserRef.current) {
+            outputAnalyserRef.current.disconnect();
+            outputAnalyserRef.current = null;
+        }
         if (outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed') {
-            outputAudioContextRef.current.close().catch(console.error);
+            outputAudioContextRef.current.close().catch(e => glossosError('Failed to close output AudioContext:', e));
             outputAudioContextRef.current = null;
         }
 
@@ -157,9 +209,12 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         nextStartTimeRef.current = 0;
         setVolume(0);
 
-    }, [transcriptionLog]);
+    }, []); // No state dependencies — uses refs only
 
     const stopConversation = useCallback(async () => {
+        // Mark as intentional stop so onClose doesn't also try to save
+        markIntentionalStop();
+
         if (sessionPromiseRef.current) {
             sessionPromiseRef.current.then((session) => {
                 session.close();
@@ -168,15 +223,36 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
 
         // Save session if user is authenticated and there are transcriptions
-        if (user && transcriptionLog.length > 0 && sessionStartTime > 0) {
-            const duration = Math.floor((Date.now() - sessionStartTime) / 1000); // seconds
-            await saveSession(transcriptionLog, selectedLanguage, duration);
+        // Use refs to avoid stale closure — state values captured by useCallback may be outdated
+        const currentTranscriptions = latestTranscriptionLogRef.current;
+        const currentStartTime = sessionStartTimeRef.current;
+        if (user && currentTranscriptions.length > 0 && currentStartTime > 0 && !isSavingRef.current) {
+            isSavingRef.current = true;
+            const duration = Math.floor((Date.now() - currentStartTime) / 1000); // seconds
+            glossosLog(`Saving session: ${currentTranscriptions.length} entries, ${duration}s`);
+            try {
+                const docId = await saveSession(currentTranscriptions, selectedLanguage, duration);
+                if (docId) {
+                    glossosLog(`Session saved: ${docId}`);
+                } else {
+                    glossosWarn('Session save returned null (Firebase not configured or user not authenticated)');
+                }
+            } catch (saveError) {
+                glossosError('Session save failed:', saveError);
+                setError('Failed to save session progress. Your conversation was not saved.');
+            } finally {
+                isSavingRef.current = false;
+            }
+        } else {
+            glossosLog(`Session not saved — user: ${!!user}, entries: ${currentTranscriptions.length}, startTime: ${currentStartTime}, alreadySaving: ${isSavingRef.current}`);
         }
 
         cleanupResources();
         setConnectionState('IDLE');
         setSessionStartTime(0);
-    }, [cleanupResources, user, transcriptionLog, selectedLanguage, sessionStartTime]);
+        sessionStartTimeRef.current = 0;
+        isIntentionalStopRef.current = false;
+    }, [cleanupResources, user, selectedLanguage, markIntentionalStop]);
 
     // Vision Mode Handlers (Phase 5)
     const handleCameraCapture = useCallback(async (imageDataUrl: string) => {
@@ -277,7 +353,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         try {
             // Log all messages for debugging
             const msgKeys = Object.keys(message);
-            console.log('[GLOSSOS] Message received:', msgKeys.join(', '), message);
+            glossosLog('Message received:', msgKeys.join(', '), message);
             // Don't flood the UI log with every message, just non-content ones or errors
             if (!message.serverContent) {
                 addDebugLog(`Msg: ${msgKeys.join(', ')}`);
@@ -291,7 +367,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             // Handle setup complete
             if ((message as any).setupComplete) {
                 addDebugLog('Setup Complete! Session Ready');
-                console.log('[GLOSSOS] ✅ Setup complete — session is ready');
+                glossosLog('Setup complete — session is ready');
                 return;
             }
 
@@ -304,7 +380,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                 if (message.serverContent.inputTranscription) {
                     const { text } = message.serverContent.inputTranscription;
-                    console.log('[GLOSSOS] 🎤 Input transcription:', text);
+                    glossosLog('Input transcription:', text);
                     setTranscriptionLog(prev => {
                         const existingEntryIndex = prev.findIndex(e => e.id === currentInputTranscriptionRef.current.id);
                         if (existingEntryIndex === -1 && text) {
@@ -323,7 +399,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                 if (message.serverContent.outputTranscription) {
                     const { text } = message.serverContent.outputTranscription;
-                    console.log('[GLOSSOS] 🤖 Output transcription:', text);
+                    glossosLog('Output transcription:', text);
                     setTranscriptionLog(prev => {
                         const existingEntryIndex = prev.findIndex(e => e.id === currentOutputTranscriptionRef.current.id);
                         if (existingEntryIndex === -1 && text) {
@@ -342,7 +418,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 }
 
                 if (message.serverContent.turnComplete) {
-                    console.log('[GLOSSOS] ✅ Turn complete');
+                    glossosLog('Turn complete');
                     const inputId = currentInputTranscriptionRef.current.id;
                     const outputId = currentOutputTranscriptionRef.current.id;
                     // Cast turnComplete to any to access runtime properties
@@ -401,33 +477,17 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                     const modelTurn = message.serverContent.modelTurn;
                     if (modelTurn.parts && modelTurn.parts.length > 0) {
                         for (const part of modelTurn.parts) {
-                            // Extract text part if present
-                            if (part.text) {
-                                const text = part.text;
-                                setTranscriptionLog(prev => {
-                                    const existingEntryIndex = prev.findIndex(e => e.id === currentOutputTranscriptionRef.current.id);
-                                    if (existingEntryIndex === -1 && text) {
-                                        const newId = Date.now();
-                                        currentOutputTranscriptionRef.current = { id: newId, text };
-                                        return [...prev, { id: newId, speaker: 'Tutor', text, isFinal: false }];
-                                    } else if (existingEntryIndex !== -1) {
-                                        const newLog = [...prev];
-                                        const newText = newLog[existingEntryIndex].text + text;
-                                        newLog[existingEntryIndex] = { ...newLog[existingEntryIndex], text: newText };
-                                        currentOutputTranscriptionRef.current.text = newText;
-                                        return newLog;
-                                    }
-                                    return prev;
-                                });
-                            }
+                            // NOTE: We intentionally do NOT render part.text here.
+                            // modelTurn text contains the AI's raw thinking/processing/instructions
+                            // which should not appear in the chat. The actual spoken words are
+                            // captured via outputTranscription above — that's what the user sees.
 
-                            // Extract and play audio part if present
+                            // Extract and play audio part only
                             const audioData = part?.inlineData?.data;
                             if (audioData && outputAudioContextRef.current) {
                                 try {
-                                    if (outputAudioContextRef.current.state === 'suspended') {
-                                        await outputAudioContextRef.current.resume();
-                                    }
+                                    // ─── MOBILE RESILIENCE: Resume both AudioContexts ───
+                                    await resumeAudioContextsIfSuspended(inputAudioContextRef, outputAudioContextRef, nextStartTimeRef);
 
                                     const audioBytes = decode(audioData);
                                     const audioBuffer = await decodeAudioData(audioBytes, outputAudioContextRef.current, 24000, 1);
@@ -437,7 +497,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                                     const source = outputAudioContextRef.current.createBufferSource();
                                     source.buffer = audioBuffer;
-                                    source.connect(outputAudioContextRef.current.destination);
+                                    if (outputAnalyserRef.current) {
+                                        source.connect(outputAnalyserRef.current);
+                                    } else {
+                                        source.connect(outputAudioContextRef.current.destination);
+                                    }
 
                                     source.onended = () => {
                                         outputSourcesRef.current.delete(source);
@@ -448,7 +512,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                     setAudioChunkCount(prev => prev + 1);
                                     outputSourcesRef.current.add(source);
                                 } catch (audioErr) {
-                                    console.error('[GLOSSOS] Audio playback error:', audioErr);
+                                    glossosError('Audio playback error:', audioErr);
                                 }
                             }
                         }
@@ -456,14 +520,14 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 }
 
                 if (message.serverContent?.interrupted) {
-                    console.log('[GLOSSOS] ⚠️ Interrupted');
+                    glossosLog('Interrupted');
                     outputSourcesRef.current.forEach(source => source.stop());
                     outputSourcesRef.current.clear();
                     nextStartTimeRef.current = 0;
                 }
             }
         } catch (msgErr) {
-            console.error('[GLOSSOS] Error handling server message:', msgErr);
+            glossosError('Error handling server message:', msgErr);
         }
     }, [addDebugLog, handleGenerateSceneImage]);
 
@@ -489,17 +553,26 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         setTranscriptionLog([]);
         currentInputTranscriptionRef.current = { id: -1, text: '' };
         currentOutputTranscriptionRef.current = { id: -1, text: '' };
-        setSessionStartTime(Date.now());
+        const now = Date.now();
+        setSessionStartTime(now);
+        sessionStartTimeRef.current = now;
 
         // NOW create fresh AudioContexts synchronously — still within the user gesture
         // This MUST happen after cleanup (which nulls the refs) and before any await
         try {
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             inputAudioContextRef.current = new AudioContextClass();
-            outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
+            outputAudioContextRef.current = new AudioContextClass({ sampleRate: OUTPUT_SAMPLE_RATE });
+
+            // ─── AI OUTPUT ANALYSER: for real-time orb frequency visualization ───
+            outputAnalyserRef.current = outputAudioContextRef.current.createAnalyser();
+            outputAnalyserRef.current.fftSize = 256;
+            outputAnalyserRef.current.smoothingTimeConstant = 0.7;
+            outputAnalyserRef.current.connect(outputAudioContextRef.current.destination);
+
             addDebugLog(`AudioContexts created (In: ${inputAudioContextRef.current.state}, Out: ${outputAudioContextRef.current.state})`);
         } catch (e) {
-            console.error('[GLOSSOS] Failed to create AudioContext:', e);
+            glossosError('Failed to create AudioContext:', e);
             setError('Failed to initialize audio. Please try again.');
             setConnectionState('ERROR');
             return;
@@ -514,6 +587,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         try {
             // Load user context for personalization
             const userContext = await loadUserContext(user.uid);
+
+            // Check for secure context (getUserMedia requires HTTPS or localhost)
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('Microphone access requires a secure connection. Please use localhost:3001 instead of the network IP address.');
+            }
 
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -532,12 +610,9 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             addDebugLog(`AudioContexts resumed (In: ${inputAudioContextRef.current!.state}, Out: ${outputAudioContextRef.current!.state})`);
 
             mediaStreamSourceRef.current = inputAudioContextRef.current.createMediaStreamSource(stream);
-            // Reduced buffer size to 2048 for lower latency (approx 40-50ms at 48k)
-            scriptProcessorRef.current = inputAudioContextRef.current.createScriptProcessor(2048, 1, 1);
 
-            scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
-                const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-
+            // ─── Shared audio processing callback ───
+            const processAudioChunk = (inputData: Float32Array) => {
                 // Calculate volume for visualizer
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) {
@@ -550,109 +625,124 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 currentAudioChunksRef.current.push(new Float32Array(inputData));
 
                 if (inputAudioContextRef.current) {
-                    // Pass actual sample rate so createBlob can downsample to 16k if needed
                     const currentSampleRate = inputAudioContextRef.current.sampleRate;
                     const pcmBlob = createBlob(inputData, currentSampleRate);
                     sessionPromiseRef.current?.then((session) => {
                         try {
                             session.sendRealtimeInput({ media: pcmBlob });
                         } catch (sendErr) {
-                            console.error('[GLOSSOS] Error sending audio:', sendErr);
+                            glossosError('Error sending audio:', sendErr);
                         }
                     }).catch((sessionErr) => {
-                        console.error('[GLOSSOS] Session promise rejected:', sessionErr);
+                        glossosError('Session promise rejected:', sessionErr);
                     });
                 }
             };
 
-            mediaStreamSourceRef.current.connect(scriptProcessorRef.current);
+            // ─── AudioWorklet (preferred) — processes audio off the main thread ───
+            // Falls back to ScriptProcessorNode for browsers without AudioWorklet support
+            let audioNodeConnected = false;
+            if (inputAudioContextRef.current.audioWorklet) {
+                try {
+                    await inputAudioContextRef.current.audioWorklet.addModule('/audio-processor-worklet.js');
+                    const workletNode = new AudioWorkletNode(inputAudioContextRef.current, 'audio-capture-processor');
+                    workletNode.port.onmessage = (event) => {
+                        if (event.data.type === 'audio') {
+                            processAudioChunk(event.data.buffer);
+                        }
+                    };
+                    mediaStreamSourceRef.current.connect(workletNode);
+                    // AudioWorkletNode doesn't need a destination connection to stay alive
+                    workletNode.connect(inputAudioContextRef.current.destination);
+                    scriptProcessorRef.current = workletNode;
+                    audioNodeConnected = true;
+                    mobileLog('Using AudioWorkletNode (off main thread)');
+                    addDebugLog('Audio: WorkletNode (off-thread)');
+                } catch (workletErr) {
+                    mobileLog('AudioWorklet failed, falling back to ScriptProcessor:', workletErr);
+                }
+            }
 
-            const silentGain = inputAudioContextRef.current.createGain();
-            silentGain.gain.value = 0;
-            scriptProcessorRef.current.connect(silentGain);
-            silentGain.connect(inputAudioContextRef.current.destination);
+            // ─── Fallback: ScriptProcessorNode (deprecated but universally supported) ───
+            if (!audioNodeConnected) {
+                const scriptNode = inputAudioContextRef.current.createScriptProcessor(AUDIO_BUFFER_SIZE, 1, 1);
+                scriptNode.onaudioprocess = (audioProcessingEvent) => {
+                    processAudioChunk(audioProcessingEvent.inputBuffer.getChannelData(0));
+                };
+                mediaStreamSourceRef.current.connect(scriptNode);
+                const silentGain = inputAudioContextRef.current.createGain();
+                silentGain.gain.value = 0;
+                scriptNode.connect(silentGain);
+                silentGain.connect(inputAudioContextRef.current.destination);
+                scriptProcessorRef.current = scriptNode;
+                mobileLog('Using ScriptProcessorNode (fallback)');
+                addDebugLog('Audio: ScriptProcessor (fallback)');
+            }
 
             addDebugLog('Connecting to Gemini...');
+            // ─── MOBILE RESILIENCE: Store params for auto-reconnect ───
+            storeSessionParams({ language: selectedLanguage, userContext: userContext || '', proficiencyLevel, nativeLanguage, voiceName: selectedVoice });
+
+            // ─── Create onClose handler with reconnection logic (from hook) ───
+            const handleWsClose = createOnCloseHandler({
+                addDebugLog,
+                setConnectionState,
+                setError,
+                handleMessage,
+                cleanupResources,
+                inputAudioContextRef,
+                outputAudioContextRef,
+                outputSourcesRef,
+                nextStartTimeRef,
+                onFinalDisconnect: (eventCode: number) => {
+                    if (eventCode !== 1000 && reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+                        setError('Connection lost. Please restart the session.');
+                    }
+
+                    // Save on abnormal disconnects (stopConversation handles intentional saves)
+                    if (!isIntentionalStopRef.current && !isSavingRef.current && user && latestTranscriptionLogRef.current.length > 0 && sessionStartTimeRef.current > 0) {
+                        glossosLog('Abnormal disconnect — saving session from onClose');
+                        isSavingRef.current = true;
+                        const duration = Math.floor((Date.now() - sessionStartTimeRef.current) / 1000);
+                        saveSession(latestTranscriptionLogRef.current, selectedLanguage, duration)
+                            .catch(glossosError)
+                            .finally(() => { isSavingRef.current = false; });
+                    } else {
+                        glossosLog(`onClose: skipping save (intentional=${isIntentionalStopRef.current}, saving=${isSavingRef.current})`);
+                    }
+
+                    setConnectionState('DISCONNECTED');
+                    cleanupResources();
+                    setSessionStartTime(0);
+                    sessionStartTimeRef.current = 0;
+                    reconnectAttemptsRef.current = 0;
+                },
+            });
+
             sessionPromiseRef.current = startLiveSession({
                 onOpen: () => {
                     addDebugLog('WebSocket OPEN');
-                    console.log('[GLOSSOS] ✅ WebSocket onOpen fired');
-                    console.log('[GLOSSOS] Input AudioContext state:', inputAudioContextRef.current?.state);
-                    console.log('[GLOSSOS] Output AudioContext state:', outputAudioContextRef.current?.state);
+                    glossosLog('WebSocket onOpen fired');
+                    glossosLog('Input AudioContext state:', inputAudioContextRef.current?.state);
+                    glossosLog('Output AudioContext state:', outputAudioContextRef.current?.state);
                     setConnectionState('CONNECTED');
+                    reconnectAttemptsRef.current = 0;
+
+                    // ─── MOBILE RESILIENCE: Start keepalive (deduplicated via hook) ───
+                    startKeepalive();
+
                     // Set a timeout — if no AI response within 15s of CONNECTED, show a hint
                     connectionTimeoutRef.current = setTimeout(() => {
-                        if (transcriptionLog.length === 0) {
+                        if (latestTranscriptionLogRef.current.length === 0) {
                             setError('No response from the AI tutor yet. Try speaking louder or check your microphone. The AI should respond within a few seconds.');
                         }
                         connectionTimeoutRef.current = null;
-                    }, 15000);
-
-                    // Initialize Speech Recognition for User Transcription
-                    try {
-                        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                        if (SpeechRecognition) {
-                            recognitionRef.current = new SpeechRecognition();
-                            recognitionRef.current.continuous = true;
-                            recognitionRef.current.interimResults = true;
-                            
-                            const langMap: Record<string, string> = {
-                                'English': 'en-US', 'Spanish': 'es-ES', 'French': 'fr-FR', 'German': 'de-DE', 
-                                'Italian': 'it-IT', 'Japanese': 'ja-JP', 'Portuguese': 'pt-BR', 
-                                'Korean': 'ko-KR', 'Chinese': 'zh-CN', 'Russian': 'ru-RU', 'Slovak': 'sk-SK', 
-                                'Yucatec Mayan': 'es-MX'
-                            };
-                            recognitionRef.current.lang = langMap[selectedLanguage] || 'en-US';
-
-                            recognitionRef.current.onresult = (event: any) => {
-                                let interim = '';
-                                let isFinal = false;
-                                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                                    if (event.results[i].isFinal) {
-                                        interim += event.results[i][0].transcript;
-                                        isFinal = true;
-                                    } else {
-                                        interim += event.results[i][0].transcript;
-                                    }
-                                }
-
-                                if (!interim) return;
-
-                                setTranscriptionLog(prev => {
-                                    const existingIndex = prev.findIndex(e => e.id === currentInputTranscriptionRef.current.id);
-                                    if (existingIndex === -1) {
-                                        const newId = Date.now();
-                                        currentInputTranscriptionRef.current = { id: newId, text: interim };
-                                        return [...prev, { id: newId, speaker: 'You', text: interim, isFinal: false }];
-                                    } else {
-                                        const newLog = [...prev];
-                                        newLog[existingIndex] = { ...newLog[existingIndex], text: interim, isFinal };
-                                        currentInputTranscriptionRef.current.text = interim;
-                                        if (isFinal) {
-                                            currentInputTranscriptionRef.current = { id: -1, text: '' };
-                                        }
-                                        return newLog;
-                                    }
-                                });
-                            };
-
-                            recognitionRef.current.onend = () => {
-                                // Restart if it stops abruptly but we are still connected
-                                if (sessionPromiseRef.current) {
-                                    try { recognitionRef.current?.start(); } catch(e) {}
-                                }
-                            };
-
-                            recognitionRef.current.start();
-                        }
-                    } catch (err) {
-                        console.warn('SpeechRecognition not supported or failed to start:', err);
-                    }
+                    }, CONNECTION_TIMEOUT_MS);
                 },
                 onMessage: handleMessage,
                 onError: (e: ErrorEvent) => {
                     addDebugLog(`Socket Error: ${e.message}`);
-                    console.error('Session error:', e);
+                    glossosError('Session error:', e);
                     const errorMsg = e.message || 'Unknown connection error';
                     if (errorMsg.includes('API key') || errorMsg.includes('401') || errorMsg.includes('403')) {
                         setError('Invalid API Key or authorization error. Please check your credentials.');
@@ -664,16 +754,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                     setConnectionState('ERROR');
                     cleanupResources();
                 },
-                onClose: (event: CloseEvent) => {
-                    addDebugLog(`Socket Closed: ${event.code}`);
-                    console.log('Session closed:', event);
-                    if (event.code !== 1000) {
-                        // Only show error for abnormal closures
-                        // setError(`Connection closed unexpectedly (code: ${event.code})`); 
-                    }
-                    setConnectionState('DISCONNECTED');
-                    cleanupResources();
-                },
+                onClose: handleWsClose,
             }, selectedLanguage, userContext, proficiencyLevel, nativeLanguage, selectedVoice);
 
             // Handle session promise for audio sending
@@ -684,7 +765,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             });
 
         } catch (err) {
-            console.error('Failed to start session:', err);
+            glossosError('Failed to start session:', err);
             addDebugLog(`Start Error: ${(err as Error).message}`);
             const message = err instanceof Error ? err.message : 'An unknown error occurred.';
             setError(`Failed to start conversation. ${message}`);
@@ -903,7 +984,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                             <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#FFBF00]/10 to-[#00FF41]/10 animate-breathe" />
                                         </div>
                                     }>
-                                        <GlossosOrb connectionState={connectionState} volume={volume} />
+                                        <GlossosOrb connectionState={connectionState} volume={volume} aiAnalyser={outputAnalyserRef.current} />
                                     </Suspense>
                                 </div>
 
@@ -1033,7 +1114,17 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                                         <>
                                                             <div className="w-px h-3 bg-white/10"></div>
                                                             <button
-                                                                onClick={() => new Audio(entry.audioUrl).play()}
+                                                                onClick={() => {
+                                                                    // Stop any currently playing audio before starting new one
+                                                                    if (playbackAudioRef.current) {
+                                                                        playbackAudioRef.current.pause();
+                                                                        playbackAudioRef.current.currentTime = 0;
+                                                                    }
+                                                                    const audio = new Audio(entry.audioUrl);
+                                                                    playbackAudioRef.current = audio;
+                                                                    audio.onended = () => { playbackAudioRef.current = null; };
+                                                                    audio.play().catch(console.error);
+                                                                }}
                                                                 className="p-1 hover:bg-white/10 rounded-full transition-colors group/btn"
                                                                 aria-label="Replay your audio"
                                                             >
