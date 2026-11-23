@@ -377,3 +377,19 @@ h1, h2, .heading-tight {
     height: 100% !important;
     touch-action: none;
 }
+
+/* Rendered Markdown in model answers (Chat, Writing Lab) */
+.glossos-md p { margin: 0.35rem 0; }
+.glossos-md ul, .glossos-md ol { margin: 0.35rem 0; padding-left: 1.25rem; }
+.glossos-md ul { list-style: disc; }
+.glossos-md ol { list-style: decimal; }
+.glossos-md li { margin: 0.15rem 0; }
+.glossos-md strong { color: #00FF41; font-weight: 600; }
+.glossos-md h3, .glossos-md h4, .glossos-md h5, .glossos-md h6 { font-weight: 700; color: #fff; margin: 0.6rem 0 0.3rem; }
+.glossos-md code { font-family: 'IBM Plex Mono', monospace; font-size: 0.85em; background: rgba(255,255,255,0.06); padding: 0.05rem 0.3rem; border-radius: 0.25rem; }
+.glossos-md pre { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.05); border-radius: 0.75rem; padding: 0.75rem; overflow-x: auto; }
+.glossos-md pre code { background: none; padding: 0; }
+.glossos-md table { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.85em; display: block; overflow-x: auto; }
+.glossos-md th, .glossos-md td { border: 1px solid rgba(255,255,255,0.08); padding: 0.3rem 0.6rem; text-align: left; }
+.glossos-md th { color: #FFBF00; font-weight: 600; background: rgba(255,191,0,0.05); }
+

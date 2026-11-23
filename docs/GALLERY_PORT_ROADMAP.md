@@ -49,14 +49,22 @@ So only skills whose result the tutor needs *before* answering are declared as L
 - **Writing Lab** (Gallery Prompt Lab). Single-turn templates: correct my grammar, rewrite in a tone, translate, explain a sentence, conjugate. It shows the prompt preview and has temperature/top-k/top-p controls.
 - **Audio Scribe.** Record or upload a clip of up to 30 s, get a transcript and translation, and turn the key words into cards.
 
-## Phase 4 — Offline mode (queued)
+## Phase 4 — Offline mode ✅ (option A, done)
 
-Gallery's core idea: on-device inference.
+Gallery's core idea, on-device inference, rebuilt for the browser.
 
-- Run Gemma in the browser with WebGPU (MediaPipe LLM Inference for Web / LiteRT web builds).
-- A model manager with download progress, a cache in the Origin Private File System, and model allowlist JSON in Gallery's schema.
-- A benchmark covering TTFT, prefill and decode tokens/sec, and init time, with min/median/max over N runs, as in Gallery's `ui/benchmark`.
-- Offline Lens and Writing Lab when no network is available.
+- **Runtime:** LiteRT-LM Web (`@litert-lm/core`, pinned to 0.19.0) runs Gemma on the GPU through WebGPU. The WebAssembly files are self-hosted at `/litert-lm/` by `vite-plugins/offlineAssets.ts`, not loaded from a CDN.
+- **Models** (`services/onDevice/models.ts`): Gemma 4 E2B (2.34 GB, recommended) and Gemma 4 E4B (3.31 GB). These are the `-gpu.litertlm` web builds, pinned to a Hugging Face commit and SHA-256.
+- **Model manager** (`components/offline/ModelManager.tsx`): WebGPU check, download with progress and cancel, load and unload, delete, storage usage. Models are stored in the Origin Private File System, because LiteRT-LM 0.19 does not cache models and Cache Storage proved unreliable for multi-gigabyte files.
+- **Benchmark** (`components/offline/BenchmarkPanel.tsx`): Gallery-style. It reports time to first token, prefill and decode tokens/sec, and load time, with min/median/avg/max over N runs. Results are saved locally and can be copied as CSV.
+- **Offline app shell** (`public/sw.js`): a service worker caches the built app, so Glossos opens without a connection.
+- **Uses:** Chat and Writing Lab can run on Gemini or on-device through `services/textEngine.ts`.
+
+**Not offline:** live voice (no on-device equivalent of Gemini Live), Lens and Audio Scribe.
+
+**Later:**
+- Gemma 4 on LiteRT-LM accepts image and audio input (`visionBackend` / `audioBackend`), so offline Lens is possible.
+- Option B (MediaPipe + Gemma 3n) is no longer needed for that.
 
 ## Known follow-ups
 

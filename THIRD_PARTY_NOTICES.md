@@ -17,6 +17,9 @@ Adapted material (each file says what it was ported from and what changed):
 | `services/speechMatch.ts` | `models/XrLanguageTeacherSpeechMatcher.kt` (simplified) |
 | `components/lens/useLensLesson.ts` | `viewmodels/XrLanguageTeacherLessonController.kt` (behaviour, rewritten for React) |
 | `services/tutorSkills/wikipedia.ts` | `skills/built-in/query-wikipedia/` (search + infobox + per-language truncation) |
+| `services/onDevice/benchmark.ts` | `ui/benchmark/` (value-series statistics and CSV export) |
+| `services/onDevice/models.ts` | `model_allowlists/` (allowlist fields and Gemma 4 defaults) |
+| `services/tutorPrompts.ts` (Writing Lab templates) | `ui/llmsingleturn/PromptTemplateConfigs.kt` (Prompt Lab templates) |
 | `services/tutorSkills/registry.ts` | `skills/SkillManager.kt`, `customtasks/agentchat/AgentTools.kt` (skill registry, enable/disable, name matching) |
 
 Licensed under the Apache License, Version 2.0 (the "License"); you may not use these files except in
@@ -27,3 +30,8 @@ compliance with the License. You may obtain a copy of the License at
 Unless required by applicable law or agreed to in writing, software distributed under the License is
 distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and limitations under the License.
+
+## LiteRT-LM Web and Gemma 4
+
+Offline mode uses [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) (`@litert-lm/core`, Apache License 2.0). It is loaded as an npm dependency, and its WebAssembly files are served from this site. The on-device models are downloaded by each user from Hugging Face ([`litert-community/gemma-4-E2B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm) and [`litert-community/gemma-4-E4B-it-litert-lm`](https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm), Apache License 2.0). They are not redistributed with Glossos.
+

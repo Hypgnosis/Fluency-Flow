@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'path';
 import { forbidSecretsInBundle } from './vite-plugins/forbidSecrets';
+import { offlineAssets } from './vite-plugins/offlineAssets';
 
 export default defineConfig(({ mode, command }) => {
   // loadEnv reads from .env files; process.env has Netlify/system env vars
@@ -23,7 +24,7 @@ export default defineConfig(({ mode, command }) => {
       port: 3001,
       host: '0.0.0.0',
     },
-    plugins: [react(), tailwindcss(), forbidSecretsInBundle({ GEMINI_API_KEY: geminiKey })],
+    plugins: [react(), tailwindcss(), offlineAssets(), forbidSecretsInBundle({ GEMINI_API_KEY: geminiKey })],
     define: {
       'process.env.VITE_WS_PROXY_URL': JSON.stringify(getEnv('VITE_WS_PROXY_URL')),
       'process.env.API_KEY': JSON.stringify(devOnlyGeminiKey),
@@ -32,6 +33,8 @@ export default defineConfig(({ mode, command }) => {
       'process.env.GEMINI_TEXT_MODEL': JSON.stringify(getEnv('GEMINI_TEXT_MODEL')),
       'process.env.GEMINI_FAST_MODEL': JSON.stringify(getEnv('GEMINI_FAST_MODEL')),
       'process.env.GEMINI_LIVE_MODEL': JSON.stringify(getEnv('GEMINI_LIVE_MODEL')),
+      // Service worker (offline app shell) is only registered in production builds
+      'process.env.GLOSSOS_REGISTER_SW': JSON.stringify(command === 'build' ? 'true' : ''),
       'process.env.FIREBASE_API_KEY': JSON.stringify(getEnv('FIREBASE_API_KEY')),
       'process.env.FIREBASE_AUTH_DOMAIN': JSON.stringify(getEnv('FIREBASE_AUTH_DOMAIN')),
       'process.env.FIREBASE_PROJECT_ID': JSON.stringify(getEnv('FIREBASE_PROJECT_ID')),
