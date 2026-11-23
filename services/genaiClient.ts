@@ -15,14 +15,41 @@ const DIRECT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 export const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash';
 /** Cheap, fast model for extraction tasks. Override with GEMINI_FAST_MODEL. */
 export const FAST_MODEL = process.env.GEMINI_FAST_MODEL || 'gemini-3.5-flash-lite';
-/** Last-resort model when the newer ones are overloaded (available to existing 2.5 users). */
+/** Reliable fallback when the newer models are overloaded (available to existing 2.5 users). */
 export const FALLBACK_MODEL = 'gemini-2.5-flash';
 
 const unique = (models: string[]) => [...new Set(models.filter(Boolean))];
-/** Try order for quality tasks (teacher replies). */
-export const TEXT_MODELS = unique([TEXT_MODEL, FAST_MODEL, FALLBACK_MODEL]);
+/**
+ * Try order for quality tasks (Lens teacher replies). In November 2026 the 3.x Flash models were
+ * often overloaded (503 after up to 13 s), while gemini-2.5-flash answered in under a second.
+ */
+export const TEXT_MODELS = unique([TEXT_MODEL, 'gemini-3.5-flash', FALLBACK_MODEL, FAST_MODEL]);
 /** Try order for fast tasks (extraction, reviews). */
 export const FAST_MODELS = unique([FAST_MODEL, FALLBACK_MODEL]);
+/** Per-model wait before moving on, for interactive calls. */
+export const MODEL_TIMEOUT_MS = 8_000;
+
+// ─── Model cooldown ───────────────────────────────────────────────────────
+// After a model fails with an overload/unavailable error, skip it for a while so every request does
+// not pay the same delay again.
+const COOLDOWN_MS = 3 * 60 * 1000;
+const cooldownUntil = new Map<string, number>();
+
+function markUnavailable(model: string, now = Date.now()) {
+    cooldownUntil.set(model, now + COOLDOWN_MS);
+}
+
+/** Models in try order, with cooled-down ones moved to the end (never dropped entirely). */
+export function orderByHealth(models: string[], now = Date.now()): string[] {
+    const healthy = models.filter(m => (cooldownUntil.get(m) ?? 0) <= now);
+    const cooling = models.filter(m => (cooldownUntil.get(m) ?? 0) > now);
+    return [...healthy, ...cooling];
+}
+
+/** Test hook. */
+export function _resetModelCooldown() {
+    cooldownUntil.clear();
+}
 
 export interface Part {
     text?: string;
@@ -229,12 +256,13 @@ export function isRetryableModelError(err: unknown): boolean {
  */
 export async function generateWithFallback(models: string[], build: (model: string) => GenerateRequest): Promise<string> {
     let lastError: unknown;
-    for (const model of models) {
+    for (const model of orderByHealth(models)) {
         try {
             return await generateText(build(model));
         } catch (err) {
             lastError = err;
             if (!isRetryableModelError(err)) throw err;
+            markUnavailable(model);
             console.warn(`[GLOSSOS] ${model} unavailable (${(err as GenAiError).status}), trying the next model`);
         }
     }
@@ -244,7 +272,7 @@ export async function generateWithFallback(models: string[], build: (model: stri
 /** Streaming version: falls back only if a model fails before sending any text. */
 export async function* streamWithFallback(models: string[], build: (model: string) => GenerateRequest): AsyncGenerator<string> {
     let lastError: unknown;
-    for (const model of models) {
+    for (const model of orderByHealth(models)) {
         let sentAny = false;
         try {
             for await (const chunk of streamText(build(model))) {
@@ -255,6 +283,7 @@ export async function* streamWithFallback(models: string[], build: (model: strin
         } catch (err) {
             lastError = err;
             if (sentAny || !isRetryableModelError(err)) throw err;
+            markUnavailable(model);
             console.warn(`[GLOSSOS] ${model} unavailable (${(err as GenAiError).status}), trying the next model`);
         }
     }

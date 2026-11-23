@@ -3,11 +3,14 @@ vi.mock('../services/firebase', () => ({ auth: fakeAuth, db: null, isFirebaseCon
 
 import {
     _setGenaiConfig, generateText, generateWithFallback, lowLatencyThinking, splitSseEvents, streamText, streamWithFallback,
-    textFromResponse, isRetryableModelError, GenAiError,
+    textFromResponse, isRetryableModelError, GenAiError, orderByHealth, _resetModelCooldown, TEXT_MODELS,
 } from '../services/genaiClient';
 import { _setLiveConfig, resolveLiveWebSocketUrl } from '../services/geminiService';
 
-beforeEach(() => _setGenaiConfig({ apiKey: 'test-key', apiBase: '' }));
+beforeEach(() => {
+    _setGenaiConfig({ apiKey: 'test-key', apiBase: '' });
+    _resetModelCooldown();
+});
 
 describe('splitSseEvents', () => {
     it('returns complete data events and keeps the partial rest', () => {
@@ -199,6 +202,33 @@ describe('timeouts', () => {
         const pending = generateText({ model: 'm', contents: [], timeoutMs: 10_000, signal: controller.signal });
         controller.abort();
         await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    });
+});
+
+describe('model cooldown', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('tries the best model first and keeps 2.5 Flash ahead of the lite model', () => {
+        expect(TEXT_MODELS).toEqual(['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3.5-flash-lite']);
+    });
+
+    it('skips a model that just failed, but never drops it entirely', async () => {
+        const overloaded = () => new Response(JSON.stringify({ error: { message: 'busy' } }), { status: 503 });
+        const ok = () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), { status: 200 });
+        const fetchMock = vi.fn().mockResolvedValueOnce(overloaded()).mockImplementation(async () => ok());
+        vi.stubGlobal('fetch', fetchMock);
+        const build = (model: string) => ({ model, contents: [] });
+
+        await generateWithFallback(['busy-model', 'good-model'], build);
+        expect(orderByHealth(['busy-model', 'good-model'])).toEqual(['good-model', 'busy-model']);
+
+        fetchMock.mockClear();
+        await generateWithFallback(['busy-model', 'good-model'], build);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls[0][0]).toContain('good-model');
+
+        // After the cooldown the preferred model is tried first again.
+        expect(orderByHealth(['busy-model', 'good-model'], Date.now() + 4 * 60 * 1000)).toEqual(['busy-model', 'good-model']);
     });
 });
 

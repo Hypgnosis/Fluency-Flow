@@ -175,7 +175,7 @@ export async function reviewTurn(
             responseSchema: buildReviewSchema(wants),
             thinkingConfig: lowLatencyThinking(model),
         },
-        timeoutMs: 20_000,
+        timeoutMs: 12_000, // background task: a little more patience than interactive calls
     }));
     const review = parseReview(raw, input.profileMistakes);
     // Only accept "fixed" items that really are in the profile, plus exact-phrase fixes found locally.

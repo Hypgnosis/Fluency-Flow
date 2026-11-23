@@ -11,7 +11,7 @@
 
 import type { PersonaId, VocabCard } from '../../types/lens';
 import {
-    Content, FAST_MODELS, TEXT_MODELS, generateWithFallback, inlineImage, lowLatencyThinking, streamWithFallback,
+    Content, FAST_MODELS, MODEL_TIMEOUT_MS, TEXT_MODELS, generateWithFallback, inlineImage, lowLatencyThinking, streamWithFallback,
 } from '../genaiClient';
 import { buildPass1Prompt, buildPass2Prompt, buildSystemPrompt, PASS2_RESPONSE_SCHEMA } from './prompts';
 import { extractStreamingReply, parsePass2Output, sanitizeVocabCard } from './dialogue';
@@ -71,7 +71,7 @@ export async function runTeacherTurn(req: TeacherTurnRequest): Promise<TeacherTu
             thinkingConfig: lowLatencyThinking(model),
         },
         signal: req.signal,
-        timeoutMs: 25_000,
+        timeoutMs: MODEL_TIMEOUT_MS,
     }))) {
         raw += chunk;
         const reply = extractStreamingReply(raw);
@@ -117,7 +117,7 @@ export async function extractVocabCard(opts: {
                 thinkingConfig: lowLatencyThinking(model),
             },
             signal: opts.signal,
-            timeoutMs: 20_000,
+            timeoutMs: MODEL_TIMEOUT_MS,
         }));
         const card = parsePass2Output(raw);
         return card ? sanitizeVocabCard(card, opts.replyWithTags) : null;

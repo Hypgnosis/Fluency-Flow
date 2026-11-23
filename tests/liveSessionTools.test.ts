@@ -1,10 +1,11 @@
 vi.mock('../services/firebase', () => ({ auth: null, db: null, isFirebaseConfigured: false }));
 
-import { _setLiveConfig, startLiveSession } from '../services/geminiService';
+import { _setLiveConfig, liveModelOrder, startLiveSession } from '../services/geminiService';
 
 class FakeWebSocket {
     static OPEN = 1;
     static last: FakeWebSocket | null = null;
+    static all: FakeWebSocket[] = [];
     readyState = 1;
     sent: any[] = [];
     onopen: (() => void) | null = null;
@@ -13,6 +14,7 @@ class FakeWebSocket {
     onclose: ((ev: unknown) => void) | null = null;
     constructor(public url: string) {
         FakeWebSocket.last = this;
+        FakeWebSocket.all.push(this);
         setTimeout(() => this.onopen?.(), 0);
     }
     send(data: string) { this.sent.push(JSON.parse(data)); }
@@ -22,8 +24,9 @@ class FakeWebSocket {
 describe('startLiveSession with Tutor Skills', () => {
     beforeEach(() => {
         FakeWebSocket.last = null;
+        FakeWebSocket.all = [];
         vi.stubGlobal('WebSocket', FakeWebSocket);
-        _setLiveConfig({ proxyUrl: '', devApiKey: 'dev-key' });
+        _setLiveConfig({ proxyUrl: '', devApiKey: 'dev-key', model: 'gemini-3.8-live' });
     });
     afterEach(() => vi.unstubAllGlobals());
 
@@ -63,5 +66,54 @@ describe('startLiveSession with Tutor Skills', () => {
     it('omits tools when none are enabled', async () => {
         startLiveSession(callbacks(), 'Spanish', '', 'Beginner', 'English', 'Puck');
         expect((await setupSent()).sent[0].setup.tools).toBeUndefined();
+    });
+
+    it('sends microphone audio in the current realtimeInput.audio format', async () => {
+        const pending = startLiveSession(callbacks(), 'Spanish', '', 'Beginner', 'English', 'Puck');
+        const ws = await setupSent();
+        expect(ws.sent[0].setup.model).toBe('models/gemini-3.8-live');
+        ws.onmessage!({ data: JSON.stringify({ setupComplete: {} }) });
+        const session = await pending;
+        session.sendRealtimeInput({ media: { data: 'QUJD', mimeType: 'audio/pcm;rate=16000' } });
+        expect(ws.sent[1]).toEqual({ realtimeInput: { audio: { data: 'QUJD', mimeType: 'audio/pcm;rate=16000' } } });
+        expect(JSON.stringify(ws.sent[1])).not.toContain('mediaChunks');
+    });
+
+    it('falls back to the next Live model when one cannot start', async () => {
+        expect(liveModelOrder()).toEqual(['gemini-3.8-live', 'gemini-3.1-flash-live-preview', 'gemini-2.5-flash-native-audio-latest']);
+        const cb = callbacks();
+        const pending = startLiveSession(cb, 'Spanish', '', 'Beginner', 'English', 'Puck');
+        const first = await setupSent();
+        first.onclose!({ code: 1008, reason: 'model not found' });
+        await vi.waitFor(() => expect(FakeWebSocket.all).toHaveLength(2));
+        const second = FakeWebSocket.all[1];
+        await vi.waitFor(() => expect(second.sent.length).toBe(1));
+        expect(second.sent[0].setup.model).toBe('models/gemini-3.1-flash-live-preview');
+        second.onmessage!({ data: JSON.stringify({ setupComplete: {} }) });
+        await expect(pending).resolves.toBeTruthy();
+        expect(cb.onOpen).toHaveBeenCalledTimes(1);
+        expect(cb.onClose).not.toHaveBeenCalled(); // the failed attempt must not trigger reconnect logic
+    });
+
+    it('reports an error when no Live model can start', async () => {
+        const cb = callbacks();
+        const pending = startLiveSession(cb, 'Spanish', '', 'Beginner', 'English', 'Puck');
+        for (let i = 0; i < 3; i++) {
+            await vi.waitFor(() => expect(FakeWebSocket.all[i]?.sent.length).toBe(1));
+            FakeWebSocket.all[i].onclose!({ code: 1008, reason: 'unavailable' });
+        }
+        await expect(pending).rejects.toThrow('Could not start a voice session (1008 unavailable)');
+        expect(cb.onError).toHaveBeenCalledWith({ message: 'Could not start a voice session (1008 unavailable)' });
+        expect(cb.onClose).not.toHaveBeenCalled();
+    });
+
+    it('closes after setup still reach the reconnect handler', async () => {
+        const cb = callbacks();
+        const pending = startLiveSession(cb, 'Spanish', '', 'Beginner', 'English', 'Puck');
+        const ws = await setupSent();
+        ws.onmessage!({ data: JSON.stringify({ setupComplete: {} }) });
+        await pending;
+        ws.onclose!({ code: 1006, reason: '' });
+        expect(cb.onClose).toHaveBeenCalledWith({ code: 1006, reason: '' });
     });
 });

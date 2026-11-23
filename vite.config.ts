@@ -31,6 +31,7 @@ export default defineConfig(({ mode, command }) => {
       // Optional model overrides for Lens Teacher and other non-Live features
       'process.env.GEMINI_TEXT_MODEL': JSON.stringify(getEnv('GEMINI_TEXT_MODEL')),
       'process.env.GEMINI_FAST_MODEL': JSON.stringify(getEnv('GEMINI_FAST_MODEL')),
+      'process.env.GEMINI_LIVE_MODEL': JSON.stringify(getEnv('GEMINI_LIVE_MODEL')),
       'process.env.FIREBASE_API_KEY': JSON.stringify(getEnv('FIREBASE_API_KEY')),
       'process.env.FIREBASE_AUTH_DOMAIN': JSON.stringify(getEnv('FIREBASE_AUTH_DOMAIN')),
       'process.env.FIREBASE_PROJECT_ID': JSON.stringify(getEnv('FIREBASE_PROJECT_ID')),

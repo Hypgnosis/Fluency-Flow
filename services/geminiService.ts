@@ -2,20 +2,33 @@ import { encode, pcmTo16kInt16 } from '../utils/audioUtils';
 import { authHeaders } from './genaiClient';
 import type { LiveFunctionResponse } from './tutorSkills/types';
 
-const MODEL_NAME = 'gemini-2.5-flash-native-audio-latest';
+/**
+ * Live (voice) models, best first. In November 2026 tests with real spoken audio, gemini-3.8-live
+ * corrected learners accurately with ~1.2 s latency; the 2.5 native-audio model interrupted itself.
+ * If a model is unavailable when a session starts, the next one is tried.
+ * Override the first choice with GEMINI_LIVE_MODEL.
+ */
+export const DEFAULT_LIVE_MODEL = 'gemini-3.8-live';
+const FALLBACK_LIVE_MODELS = ['gemini-3.1-flash-live-preview', 'gemini-2.5-flash-native-audio-latest'];
 const API_VERSION = 'v1beta';
 
 // Optional self-hosted WebSocket proxy (server/). Not needed on Netlify, where the browser gets a
 // short-lived ephemeral token from /api/live-token instead.
 const liveConfig = {
+  model: process.env.GEMINI_LIVE_MODEL || DEFAULT_LIVE_MODEL,
   proxyUrl: process.env.VITE_WS_PROXY_URL || '',
   /** Dev-only key; always empty in production builds (see vite.config.ts). */
   devApiKey: process.env.API_KEY || process.env.GEMINI_API_KEY || '',
 };
 
-/** Test hook: overrides the build-time proxy URL / dev key. */
+/** Test hook: overrides the build-time proxy URL / dev key / model. */
 export function _setLiveConfig(overrides: Partial<typeof liveConfig>) {
   Object.assign(liveConfig, overrides);
+}
+
+/** The order in which Live models are tried when a session starts. */
+export function liveModelOrder(): string[] {
+  return [...new Set([liveConfig.model, DEFAULT_LIVE_MODEL, ...FALLBACK_LIVE_MODELS].filter(Boolean))];
 }
 const LIVE_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage';
 
@@ -80,7 +93,7 @@ export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch): 
  * In development, falls back to a direct Gemini connection.
  * Returns a promise that resolves to a session-like object.
  */
-export function startLiveSession(
+export async function startLiveSession(
   callbacks: GeminiCallbacks,
   language: string,
   userContext?: string,
@@ -179,41 +192,45 @@ This creates an immersive experience where the learner can connect words to real
     .filter(Boolean)
     .join('\n\n');
 
-  return new Promise<LiveSession>(async (resolve, reject) => {
-    try {
-      const wsUrl = await resolveLiveWebSocketUrl();
+  const setupFor = (model: string) => ({
+    setup: {
+      model: `models/${model}`,
+      generationConfig: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: voiceName
+            }
+          }
+        }
+      },
+      systemInstruction: {
+        parts: [{ text: systemInstruction }]
+      },
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+      ...(tools?.functionDeclarations.length
+        ? { tools: [{ functionDeclarations: tools.functionDeclarations }] }
+        : {}),
+    }
+  });
 
-      console.log('[GLOSSOS] Opening WebSocket connection...');
+  type Attempt = { session: LiveSession } | { failure: string };
+
+  /** Opens one WebSocket for `model`. Resolves with the session, or with why it failed before setup. */
+  const attempt = async (model: string): Promise<Attempt> => {
+    // Throws (no retry) if we cannot get a URL/token, e.g. signed out or server not configured.
+    const wsUrl = await resolveLiveWebSocketUrl();
+
+    return new Promise<Attempt>(resolve => {
+      let ready = false;
+      console.log(`[GLOSSOS] Opening WebSocket connection (${model})...`);
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         console.log('[GLOSSOS] [OK] WebSocket OPEN — sending setup...');
-
-        // Send setup message
-        const setupMsg = {
-          setup: {
-            model: `models/${MODEL_NAME}`,
-            generationConfig: {
-              responseModalities: ['AUDIO'],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: {
-                    voiceName: voiceName
-                  }
-                }
-              }
-            },
-            systemInstruction: {
-              parts: [{ text: systemInstruction }]
-            },
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-            ...(tools?.functionDeclarations.length
-              ? { tools: [{ functionDeclarations: tools.functionDeclarations }] }
-              : {}),
-          }
-        };
-        ws.send(JSON.stringify(setupMsg));
+        ws.send(JSON.stringify(setupFor(model)));
       };
 
       ws.onmessage = async (event: MessageEvent) => {
@@ -234,18 +251,21 @@ This creates an immersive experience where the learner can connect words to real
 
         // If this is the setupComplete message, resolve the session
         if (data.setupComplete !== undefined) {
-          console.log('[GLOSSOS] [OK] Setup complete — session ready!');
+          console.log(`[GLOSSOS] [OK] Setup complete — session ready (${model})`);
+          ready = true;
           callbacks.onOpen();
 
           const session: LiveSession = {
             sendRealtimeInput: (params: { media: { data: string; mimeType: string } }) => {
               if (ws.readyState !== WebSocket.OPEN) return;
+              // `realtimeInput.audio` is the current format; the older `mediaChunks` field is rejected
+              // ("deprecated") or ignored by newer Live models.
               const msg = {
                 realtimeInput: {
-                  mediaChunks: [{
+                  audio: {
                     data: params.media.data,
                     mimeType: params.media.mimeType,
-                  }]
+                  }
                 }
               };
               ws.send(JSON.stringify(msg));
@@ -276,7 +296,7 @@ This creates an immersive experience where the learner can connect words to real
             }
           };
 
-          resolve(session);
+          resolve({ session });
           return;
         }
 
@@ -286,17 +306,25 @@ This creates an immersive experience where the learner can connect words to real
 
       ws.onerror = (e: Event) => {
         console.error('[GLOSSOS] [ERROR] WebSocket error:', e);
-        callbacks.onError(e as ErrorEvent);
-        reject(new Error('WebSocket connection error'));
+        if (ready) callbacks.onError(e as ErrorEvent);
       };
 
       ws.onclose = (e: CloseEvent) => {
         console.log('[GLOSSOS] 🔌 WebSocket closed:', e.code, e.reason);
-        callbacks.onClose(e);
+        if (ready) callbacks.onClose(e);
+        else resolve({ failure: `${e.code}${e.reason ? ` ${e.reason}` : ''}` });
       };
+    });
+  };
 
-    } catch (err) {
-      reject(err);
-    }
-  });
+  let lastFailure = '';
+  for (const model of liveModelOrder()) {
+    const result = await attempt(model);
+    if ('session' in result) return result.session;
+    lastFailure = result.failure;
+    console.warn(`[GLOSSOS] Live model ${model} could not start (${lastFailure}); trying the next one`);
+  }
+  const message = `Could not start a voice session (${lastFailure || 'no model available'})`;
+  callbacks.onError({ message } as ErrorEvent);
+  throw new Error(message);
 }
