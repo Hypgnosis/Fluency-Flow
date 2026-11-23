@@ -27,3 +27,6 @@ server/node_modules
 *.njsproj
 *.sln
 *.sw?
+
+# Netlify CLI local state
+.netlify

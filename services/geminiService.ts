@@ -1,12 +1,22 @@
 import { encode, pcmTo16kInt16 } from '../utils/audioUtils';
-import { Modality } from '@google/genai';
+import { authHeaders } from './genaiClient';
 
 const MODEL_NAME = 'gemini-2.5-flash-native-audio-latest';
 const API_VERSION = 'v1beta';
 
-// Proxy URL for production — keeps API key server-side
-// Set VITE_WS_PROXY_URL in your .env.local or hosting env vars
-const WS_PROXY_URL = process.env.VITE_WS_PROXY_URL || '';
+// Optional self-hosted WebSocket proxy (server/). Not needed on Netlify, where the browser gets a
+// short-lived ephemeral token from /api/live-token instead.
+const liveConfig = {
+  proxyUrl: process.env.VITE_WS_PROXY_URL || '',
+  /** Dev-only key; always empty in production builds (see vite.config.ts). */
+  devApiKey: process.env.API_KEY || process.env.GEMINI_API_KEY || '',
+};
+
+/** Test hook: overrides the build-time proxy URL / dev key. */
+export function _setLiveConfig(overrides: Partial<typeof liveConfig>) {
+  Object.assign(liveConfig, overrides);
+}
+const LIVE_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage';
 
 export interface GeminiCallbacks {
   onOpen: () => void;
@@ -33,28 +43,26 @@ export function createBlob(data: Float32Array, inputSampleRate: number): { data:
 }
 
 /**
- * Resolves the WebSocket URL.
- * - Production: uses the WS proxy (API key stays server-side)
- * - Development: connects directly to Gemini (requires client-side API key)
+ * Resolves the Live WebSocket URL.
+ * - Self-hosted proxy, if VITE_WS_PROXY_URL is set.
+ * - Local `npm run dev`: direct connection with the dev key from .env.local.
+ * - Production (Netlify): asks /api/live-token for a one-use ephemeral token and connects to the
+ *   constrained endpoint with it, so the real API key never reaches the browser.
  */
-function getWebSocketUrl(): string {
-  if (WS_PROXY_URL) {
-    // Production: connect to proxy — no API key in the client bundle
-    const proxyUrl = WS_PROXY_URL.replace(/\/$/, ''); // trim trailing slash
-    console.log('[GLOSSOS] Using WebSocket proxy:', proxyUrl);
-    return `${proxyUrl}/ws`;
+export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch): Promise<string> {
+  if (liveConfig.proxyUrl) {
+    return `${liveConfig.proxyUrl.replace(/\/$/, '')}/ws`;
   }
-
-  // Development fallback: direct connection (API key exposed — dev only!)
-  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error('[GLOSSOS] No WS_PROXY_URL and no API key configured!');
-    throw new Error(
-      'Set VITE_WS_PROXY_URL for production, or GEMINI_API_KEY for local development.'
-    );
+  if (liveConfig.devApiKey) {
+    console.warn('[GLOSSOS] [DEV] Using direct Gemini connection with the local dev key');
+    return `${LIVE_WS_BASE}.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${liveConfig.devApiKey}`;
   }
-  console.warn('[GLOSSOS] [WARN] Using direct Gemini connection (API key exposed — dev only)');
-  return `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+  const res = await fetchImpl('/api/live-token', { method: 'POST', headers: await authHeaders() });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.token) {
+    throw new Error(body?.error?.message || `Could not start a voice session (${res.status})`);
+  }
+  return `${LIVE_WS_BASE}.${API_VERSION}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(body.token)}`;
 }
 
 /**
@@ -161,9 +169,9 @@ This creates an immersive experience where the learner can connect words to real
     ? `${baseInstruction}\n\n${userContext}`
     : baseInstruction;
 
-  return new Promise<LiveSession>((resolve, reject) => {
+  return new Promise<LiveSession>(async (resolve, reject) => {
     try {
-      const wsUrl = getWebSocketUrl();
+      const wsUrl = await resolveLiveWebSocketUrl();
 
       console.log('[GLOSSOS] Opening WebSocket connection...');
       const ws = new WebSocket(wsUrl);

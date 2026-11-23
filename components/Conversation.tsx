@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, Suspense, lazy } from 'react';
 import { startLiveSession, createBlob } from '../services/geminiService';
 import { decode, decodeAudioData, encodeWAV } from '../utils/audioUtils';
-import { TranscriptionEntry, VocabularyCard } from '../types';
+import { TranscriptionEntry } from '../types';
 import { MicrophoneIcon, StopIcon, PlayIcon, ChevronDownIcon } from './icons/Icons';
 import PronunciationScoreCircle from './PronunciationScoreCircle';
 import { useAuth, AuthModal } from './AuthModal';
@@ -9,9 +9,6 @@ import { saveSession, loadUserContext } from '../services/sessionManager';
 import { PronunciationAnalysisCard } from './PhoneticFeedback';
 import { AudioComparisonPlayer } from './AudioComparisonPlayer';
 import { createMockPhoneticAnalysis } from '../services/phoneticAnalysis';
-import { CameraCapture } from './CameraCapture';
-import { VocabularyCardDisplay, VocabularyCollection } from './VocabularyCard';
-import { analyzeImageForVocabulary } from '../services/visionService';
 import { shouldGenerateImage, generateSceneImage } from '../services/imageGenerationService';
 import { SceneImage, SceneImageSkeleton } from './SceneImage';
 import { useMobileResilience, resumeAudioContextsIfSuspended } from '../hooks/useMobileResilience';
@@ -19,6 +16,7 @@ import { useWebSocketSession, MAX_RECONNECT_ATTEMPTS } from '../hooks/useWebSock
 import { glossosLog, glossosWarn, glossosError, mobileLog } from '../utils/debugLog';
 
 const GlossosOrb = lazy(() => import('./GlossosOrb'));
+const LensTeacher = lazy(() => import('./lens/LensTeacher'));
 
 
 type ConnectionState = 'IDLE' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR';
@@ -85,11 +83,8 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [sessionStartTime, setSessionStartTime] = useState<number>(0);
 
-    // Vision Mode (Phase 5)
+    // Lens mode (port of Google AI Edge Gallery's XR Language Teacher)
     const [isVisionMode, setIsVisionMode] = useState(false);
-    const [showCamera, setShowCamera] = useState(false);
-    const [vocabularyCards, setVocabularyCards] = useState<VocabularyCard[]>([]);
-    const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
     const [sceneImagesEnabled, setSceneImagesEnabled] = useState(true);
     const [messageCount, setMessageCount] = useState(0);
     const [audioChunkCount, setAudioChunkCount] = useState(0);
@@ -254,32 +249,6 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         isIntentionalStopRef.current = false;
     }, [cleanupResources, user, selectedLanguage, markIntentionalStop]);
 
-    // Vision Mode Handlers (Phase 5)
-    const handleCameraCapture = useCallback(async (imageDataUrl: string) => {
-        setShowCamera(false);
-        setIsAnalyzingImage(true);
-        setError(null);
-
-        try {
-            const result = await analyzeImageForVocabulary(imageDataUrl, selectedLanguage);
-            setVocabularyCards(prev => [result.vocabularyCard, ...prev]);
-        } catch (err) {
-            console.error('Vision analysis error:', err);
-            setError('Failed to analyze image. Please try again.');
-        } finally {
-            setIsAnalyzingImage(false);
-        }
-    }, [selectedLanguage]);
-
-    const handlePracticeCard = useCallback((cardId: string) => {
-        const card = vocabularyCards.find(c => c.id === cardId);
-        if (!card) return;
-
-        // TODO: Launch conversation mode with focus on this word
-        console.log('Practice card:', card.word);
-        setIsVisionMode(false);
-    }, [vocabularyCards]);
-
     // Help Me functionality
     const handleHelpMe = useCallback(() => {
         if (sessionPromiseRef.current) {
@@ -343,11 +312,6 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             );
         }
     }, [sceneImagesEnabled, selectedLanguage]);
-
-    const handleDeleteCard = useCallback((cardId: string) => {
-        setVocabularyCards(prev => prev.filter(c => c.id !== cardId));
-    }, []);
-
 
     const handleMessage = useCallback(async (message: any) => {
         try {
@@ -846,7 +810,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                     ? 'bg-[#FFBF00]/15 text-[#FFBF00] border border-[#FFBF00]/30 shadow-lg shadow-[#FFBF00]/10'
                                     : 'bg-white/[0.04] text-slate-500 border border-white/[0.06] hover:bg-white/[0.08] hover:text-slate-300'
                                     }`}
-                                title={isVisionMode ? 'Switch to Voice Mode' : 'Switch to Vision Mode'}
+                                title={isVisionMode ? 'Switch to Voice Mode' : 'Switch to Lens: point your camera and learn words'}
                                 style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                             >
                                 {isVisionMode ? (
@@ -859,7 +823,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
                                     </svg>
                                 )}
-                                <span className="hidden sm:inline">{isVisionMode ? 'Vision' : 'Voice'}</span>
+                                <span className="hidden sm:inline">{isVisionMode ? 'Lens' : 'Voice'}</span>
                             </button>
 
                             {/* Scene Images Toggle */}
@@ -1156,67 +1120,15 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         ))}
                     </div>
                 ) : (
-                    /* Vision Mode - Vocabulary Collection */
-                    <div className="flex-grow overflow-y-auto p-6 md:p-8">
-                        {isAnalyzingImage && (
-                            <div className="flex items-center justify-center py-12">
-                                <div className="text-center">
-                                    <div className="w-16 h-16 mx-auto mb-4 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
-                                    <p className="text-white font-semibold">Analyzing image...</p>
-                                    <p className="text-slate-400 text-sm mt-1">Creating vocabulary card</p>
-                                </div>
+                    /* Lens Mode - camera teacher, saved words and study */
+                    <div className="flex-grow min-h-0 flex flex-col">
+                        <Suspense fallback={
+                            <div className="flex-grow flex items-center justify-center">
+                                <div className="w-12 h-12 rounded-full border-2 border-[#FFBF00]/20 border-t-[#FFBF00] animate-spin" />
                             </div>
-                        )}
-
-                        {!isAnalyzingImage && vocabularyCards.length === 0 && (
-                            <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                                <div className="relative animate-float mb-8">
-                                    <div className="absolute -inset-6 bg-purple-500/10 rounded-full blur-2xl"></div>
-                                    <div className="w-28 h-28 rounded-full bg-gradient-to-br from-purple-500/15 to-blue-500/15 border border-purple-500/20 flex items-center justify-center overflow-hidden">
-                                        <svg className="w-14 h-14 text-purple-400/60 relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                                        </svg>
-                                    </div>
-                                </div>
-                                <h2 className="text-white text-xl font-bold mb-2">No Vocabulary Cards Yet</h2>
-                                <p className="text-slate-500 text-sm mb-6 max-w-sm">Point your camera at objects to learn new words in your target language</p>
-                                <button
-                                    onClick={() => setShowCamera(true)}
-                                    className="px-6 py-3 bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white font-semibold rounded-xl transition-all shadow-lg shadow-purple-500/20 hover:shadow-purple-500/30 flex items-center gap-2"
-                                >
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                                    </svg>
-                                    Capture Object
-                                </button>
-                            </div>
-                        )}
-
-                        {vocabularyCards.length > 0 && (
-                            <div>
-                                <div className="flex items-center justify-between mb-6">
-                                    <h3 className="text-white font-bold text-lg">
-                                        Vocabulary Collection ({vocabularyCards.length})
-                                    </h3>
-                                    <button
-                                        onClick={() => setShowCamera(true)}
-                                        className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 rounded-lg transition-colors flex items-center gap-2 text-sm font-semibold"
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                        </svg>
-                                        Add Card
-                                    </button>
-                                </div>
-                                <VocabularyCollection
-                                    cards={vocabularyCards}
-                                    onPracticeCard={handlePracticeCard}
-                                    onDeleteCard={handleDeleteCard}
-                                />
-                            </div>
-                        )}
+                        }>
+                            <LensTeacher nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} />
+                        </Suspense>
                     </div>
                 )}
 
@@ -1231,6 +1143,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 {/* ============================================
                     BOTTOM CONTROL CENTER — Premium Mic Button & Help
                     ============================================ */}
+                {!isVisionMode && (
                 <div className="px-6 py-4 border-t border-white/[0.04] flex flex-col items-center justify-center relative overflow-hidden">
 
 
@@ -1382,19 +1295,12 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         }
                     </p>
                 </div>
+                )}
             </div>
 
             {/* Auth Modal */}
             {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
 
-            {/* Camera Capture Modal (Phase 5) */}
-            {showCamera && (
-                <CameraCapture
-                    isActive={showCamera}
-                    onCapture={handleCameraCapture}
-                    onClose={() => setShowCamera(false)}
-                />
-            )}
         </div>
     );
 };
