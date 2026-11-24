@@ -19,6 +19,7 @@ const ChatTutor = lazy(() => import('../chat/ChatTutor').then(m => ({ default: m
 const WritingLab = lazy(() => import('../lab/WritingLab').then(m => ({ default: m.WritingLab })));
 const OfflinePanel = lazy(() => import('../offline/OfflinePanel'));
 const AudioScribe = lazy(() => import('../scribe/AudioScribe'));
+const ConversationAssist = lazy(() => import('../assist/ConversationAssist'));
 
 const initialMode = (): AppMode => {
     // Dev-only: ?ui-preview&mode=lens opens a page directly for screen reviews.
@@ -146,7 +147,7 @@ export const AppShell: React.FC = () => {
                                             </motion.span>
                                         )}
                                         <Icon name={item.icon} size={19} className={cx('relative transition-colors', active ? 'text-gold-400' : 'text-slate-500 group-hover:text-slate-300')} />
-                                        <span className="relative">{item.id === 'lab' ? 'Write' : item.title}</span>
+                                        <span className="relative">{item.id === 'lab' ? 'Write' : item.id === 'assist' ? 'Assist' : item.title}</span>
                                         {item.id === 'voice' && voiceActive && (
                                             <span className="relative ml-auto flex h-2 w-2">
                                                 <span className="absolute inset-0 animate-ping rounded-full bg-mint-400/70" />
@@ -206,7 +207,10 @@ export const AppShell: React.FC = () => {
                                         exit={{ opacity: 0, y: -6 }}
                                         transition={{ duration: 0.2 }}
                                     >
-                                        <h1 className="truncate font-display text-lg font-bold tracking-tight text-white lg:text-2xl">{page.title}</h1>
+                                        <h1 className="truncate font-display text-lg font-bold tracking-tight text-white lg:text-2xl">
+                                            <span className="lg:hidden">{page.label}</span>
+                                            <span className="hidden lg:inline">{page.title}</span>
+                                        </h1>
                                         <p className="hidden truncate text-sm text-slate-400 lg:block">{page.subtitle}</p>
                                     </motion.div>
                                 </AnimatePresence>
@@ -246,6 +250,7 @@ export const AppShell: React.FC = () => {
                                 <Suspense fallback={<PageFallback />}>
                                     {mode === 'voice' && <Conversation />}
                                     {mode === 'lens' && <LensTeacher nativeLanguage={nativeLanguage} learnLanguage={learnLanguage} level={level} />}
+                                    {mode === 'assist' && <ConversationAssist nativeLanguage={nativeLanguage} learnLanguage={learnLanguage} level={level} />}
                                     {mode === 'chat' && <ChatTutor nativeLanguage={nativeLanguage} learnLanguage={learnLanguage} level={level} onManageModels={() => navigate('offline')} />}
                                     {mode === 'lab' && (
                                         <div className="min-h-0 flex-1 overflow-y-auto">

@@ -30,6 +30,9 @@ const PATHS = {
     cloud: 'M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9H7Z',
     download: 'M12 4v11 M7 10l5 5 5-5 M5 20h14',
     play: 'M8 5v14l11-7L8 5Z',
+    ear: 'M6.5 9a5.5 5.5 0 0 1 11 0c0 3.2-3.2 4.3-3.2 7.2a3.3 3.3 0 0 1-6.2 1.6 M9.5 9a2.5 2.5 0 0 1 5 0c0 1.4-1.2 2-1.8 2.9',
+    expand: 'M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5',
+    swap: 'M7 7h11l-3-3 M17 17H6l3 3',
 } as const;
 
 export type IconName = keyof typeof PATHS;

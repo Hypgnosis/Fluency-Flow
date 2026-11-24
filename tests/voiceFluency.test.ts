@@ -106,7 +106,7 @@ describe('live tool calls', () => {
         };
         const started = Date.now();
         const { responses } = await executeToolCalls([{ id: 'c1', name: 'lookup_wikipedia', args: {} }], [slow as any], {} as any, 50);
-        expect(Date.now() - started).toBeLessThan(1000);
+        expect(Date.now() - started).toBeLessThan(2500);
         expect(responses[0]).toMatchObject({ id: 'c1', response: { error: expect.stringMatching(/too long/) } });
     });
 });

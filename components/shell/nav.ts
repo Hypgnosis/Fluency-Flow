@@ -1,6 +1,6 @@
 import type { IconName } from '../ui/Icon';
 
-export type AppMode = 'voice' | 'lens' | 'chat' | 'lab' | 'scribe' | 'offline';
+export type AppMode = 'voice' | 'lens' | 'assist' | 'chat' | 'lab' | 'scribe' | 'offline';
 
 export interface NavItem {
     id: AppMode;
@@ -15,6 +15,7 @@ export interface NavItem {
 export const NAV: NavItem[] = [
     { id: 'voice', label: 'Talk', icon: 'mic', title: 'Talk', subtitle: 'A real conversation with your tutor, out loud' },
     { id: 'lens', label: 'Lens', icon: 'camera', title: 'Lens', subtitle: 'Point your camera at anything and learn its name' },
+    { id: 'assist', label: 'Assist', icon: 'ear', title: 'Conversation Assist', subtitle: 'Listens to a real conversation and helps you reply' },
     { id: 'chat', label: 'Chat', icon: 'chat', title: 'Chat', subtitle: 'Practice by text, online or fully on-device' },
     { id: 'lab', label: 'Write', icon: 'pen', title: 'Writing Lab', subtitle: 'Correct, rewrite, translate and explain your text' },
     { id: 'scribe', label: 'Scribe', icon: 'wave', title: 'Audio Scribe', subtitle: 'Transcribe and translate songs, voice notes and clips' },
