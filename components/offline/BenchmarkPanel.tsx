@@ -85,7 +85,7 @@ export const BenchmarkPanel: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
                                 <button onClick={() => abort.current?.abort()} className="ml-auto text-xs text-slate-400 hover:text-white" style={MONO}>Stop</button>
                             </>
                         ) : (
-                            <button onClick={start} className="px-4 py-2 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] text-xs font-bold" style={MONO}>
+                            <button onClick={start} className="px-4 py-2 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] text-xs font-bold" style={MONO}>
                                 Run benchmark
                             </button>
                         )}
@@ -120,7 +120,7 @@ export const BenchmarkPanel: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
                                     ['Load', r.initMs ? `${(r.initMs / 1000).toFixed(1)} s` : '—'],
                                 ].map(([label, value]) => (
                                     <div key={label} className="rounded-xl bg-black/30 py-2">
-                                        <div className="text-[#00FF41] text-sm font-semibold">{value}</div>
+                                        <div className="text-[#3DF5A0] text-sm font-semibold">{value}</div>
                                         <div className="text-[10px] text-slate-500 uppercase tracking-wider">{label}</div>
                                     </div>
                                 ))}

@@ -4,7 +4,7 @@ import { deleteModel, downloadModel, isDownloaded, storageInfo, StorageFullError
 import { onDeviceRuntime, webGpuStatus, type WebGpuStatus } from '../../services/onDevice/runtime';
 import { useOnDeviceStatus } from './useOnDevice';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 interface ModelManagerProps {
     onOpenBenchmark?: () => void;
@@ -81,14 +81,13 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onOpenBenchmark }) =
     return (
         <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-4">
             <div>
-                <h2 className="text-white text-lg font-bold">Offline models</h2>
-                <p className="text-slate-500 text-sm mt-1">
+                <p className="text-slate-400 text-[15px] leading-relaxed">
                     Download a model once and Chat and Writing Lab work with no internet connection. Everything runs on your
                     device's GPU, and nothing you type leaves it.
                 </p>
             </div>
 
-            <div className={`rounded-2xl border p-3 text-xs ${gpu?.supported ? 'border-[#00FF41]/20 bg-[#00FF41]/[0.04] text-[#00FF41]' : 'border-amber-500/20 bg-amber-500/[0.05] text-amber-200'}`} style={MONO}>
+            <div className={`rounded-2xl border p-3 text-xs ${gpu?.supported ? 'border-[#3DF5A0]/20 bg-[#3DF5A0]/[0.04] text-[#3DF5A0]' : 'border-amber-500/20 bg-amber-500/[0.05] text-amber-200'}`} style={MONO}>
                 {gpu === null ? 'Checking your GPU…' : gpu.supported ? `✓ WebGPU ready · ${gpu.adapter}` : `⚠ ${gpu.reason}`}
             </div>
 
@@ -108,7 +107,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onOpenBenchmark }) =
                                     <div className="flex items-center gap-2">
                                         <h3 className="text-white font-semibold">{model.name}</h3>
                                         {model.recommended && <span className="text-[9px] uppercase tracking-[0.15em] px-2 py-0.5 rounded-full bg-[#FFBF00]/15 text-[#FFBF00]" style={MONO}>Recommended</span>}
-                                        {isLoaded && <span className="text-[9px] uppercase tracking-[0.15em] px-2 py-0.5 rounded-full bg-[#00FF41]/15 text-[#00FF41]" style={MONO}>Loaded</span>}
+                                        {isLoaded && <span className="text-[9px] uppercase tracking-[0.15em] px-2 py-0.5 rounded-full bg-[#3DF5A0]/15 text-[#3DF5A0]" style={MONO}>Loaded</span>}
                                     </div>
                                     <p className="text-slate-400 text-xs mt-1">{model.description}</p>
                                     <p className="text-slate-600 text-[11px] mt-1" style={MONO}>
@@ -118,7 +117,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onOpenBenchmark }) =
                                 <div className="flex flex-col items-end gap-2 flex-shrink-0">
                                     {!isDown && !downloading && (
                                         <button onClick={() => download(model)} disabled={!gpu?.supported}
-                                            className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] disabled:opacity-40" style={MONO}>
+                                            className="px-3 py-1.5 rounded-full text-xs font-bold bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] disabled:opacity-40" style={MONO}>
                                             Download
                                         </button>
                                     )}
@@ -153,7 +152,7 @@ export const ModelManager: React.FC<ModelManagerProps> = ({ onOpenBenchmark }) =
                             {downloading && (
                                 <div className="mt-3">
                                     <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                                        <div className="h-full bg-gradient-to-r from-[#00FF41] to-[#FFBF00] transition-all" style={{ width: `${Math.round(pct * 100)}%` }} />
+                                        <div className="h-full bg-gradient-to-r from-[#3DF5A0] to-[#FFBF00] transition-all" style={{ width: `${Math.round(pct * 100)}%` }} />
                                     </div>
                                     <p className="text-[11px] text-slate-500 mt-1" style={MONO}>
                                         {Math.round(pct * 100)}% · {formatBytes(pct * model.sizeBytes)} of {formatBytes(model.sizeBytes)} · keep this tab open

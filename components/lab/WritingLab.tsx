@@ -6,7 +6,7 @@ import { EngineSwitch } from '../offline/EngineSwitch';
 import { useEnginePreference } from '../offline/useOnDevice';
 import { StatsLine } from '../chat/StatsLine';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 interface WritingLabProps {
     nativeLanguage: string;
@@ -88,14 +88,14 @@ export const WritingLab: React.FC<WritingLabProps> = ({ nativeLanguage, learnLan
         <label className="block text-[11px] text-slate-400" style={MONO}>
             <span className="flex justify-between"><span>{label}</span><span className="text-slate-200">{params[key]}</span></span>
             <input type="range" min={min} max={max} step={step} value={params[key]}
-                onChange={e => setParams(p => ({ ...p, [key]: Number(e.target.value) }))} className="w-full accent-[#00FF41]" />
+                onChange={e => setParams(p => ({ ...p, [key]: Number(e.target.value) }))} className="w-full accent-[#3DF5A0]" />
         </label>
     );
 
     return (
         <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-                <h2 className="text-white text-lg font-bold">Writing Lab</h2>
+                <p className="text-[15px] text-slate-400">Pick a tool, then paste or write your text.</p>
                 <EngineSwitch value={engine} onChange={setEngine} onManageModels={onManageModels} />
             </div>
 
@@ -131,7 +131,7 @@ export const WritingLab: React.FC<WritingLabProps> = ({ nativeLanguage, learnLan
                 {running ? (
                     <button onClick={() => abort.current?.abort()} className="px-4 py-2 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold" style={MONO}>Stop</button>
                 ) : (
-                    <button onClick={run} disabled={!input.trim()} className="px-5 py-2 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] text-xs font-bold disabled:opacity-40" style={MONO}>Run</button>
+                    <button onClick={run} disabled={!input.trim()} className="px-5 py-2 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] text-xs font-bold disabled:opacity-40" style={MONO}>Run</button>
                 )}
                 <button onClick={() => setShowPreview(v => !v)} className="text-[11px] text-slate-500 hover:text-slate-300" style={MONO}>{showPreview ? 'Hide' : 'Preview'} prompt</button>
                 <button onClick={() => setShowParams(v => !v)} className="text-[11px] text-slate-500 hover:text-slate-300" style={MONO}>{showParams ? 'Hide' : 'Model'} settings</button>
@@ -154,7 +154,7 @@ export const WritingLab: React.FC<WritingLabProps> = ({ nativeLanguage, learnLan
             {error && <p className="text-rose-300 text-xs">{error}</p>}
 
             {(output || running) && (
-                <div className="rounded-2xl border border-[#00FF41]/[0.08] bg-[#0d0d0e]/95 p-4">
+                <div className="rounded-2xl border border-[#3DF5A0]/[0.08] bg-[#0d0d0e]/95 p-4">
                     <div className="glossos-md text-sm text-[#F5F5F7] leading-relaxed" dangerouslySetInnerHTML={{ __html: html || '<p>…</p>' }} />
                     <div className="flex items-center justify-between mt-3">
                         <StatsLine stats={stats} />
@@ -162,7 +162,6 @@ export const WritingLab: React.FC<WritingLabProps> = ({ nativeLanguage, learnLan
                     </div>
                 </div>
             )}
-            <p className="text-[10px] text-slate-600" style={MONO}>Prompt templates adapted from Google AI Edge Gallery's Prompt Lab.</p>
         </div>
     );
 };

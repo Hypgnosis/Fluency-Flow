@@ -35,6 +35,8 @@ export default defineConfig(({ mode, command }) => {
       'process.env.GEMINI_LIVE_MODEL': JSON.stringify(getEnv('GEMINI_LIVE_MODEL')),
       // Service worker (offline app shell) is only registered in production builds
       'process.env.GLOSSOS_REGISTER_SW': JSON.stringify(command === 'build' ? 'true' : ''),
+      // Dev-only ?ui-preview stand-in user for reviewing screens (never in production builds)
+      'process.env.GLOSSOS_DEV_PREVIEW': JSON.stringify(command === 'serve' ? 'true' : ''),
       'process.env.FIREBASE_API_KEY': JSON.stringify(getEnv('FIREBASE_API_KEY')),
       'process.env.FIREBASE_AUTH_DOMAIN': JSON.stringify(getEnv('FIREBASE_AUTH_DOMAIN')),
       'process.env.FIREBASE_PROJECT_ID': JSON.stringify(getEnv('FIREBASE_PROJECT_ID')),

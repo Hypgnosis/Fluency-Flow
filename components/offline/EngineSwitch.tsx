@@ -3,7 +3,7 @@ import type { EngineKind } from '../../services/textEngine';
 import { findModel } from '../../services/onDevice/models';
 import { useOnDeviceStatus, useOnline } from './useOnDevice';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 interface EngineSwitchProps {
     value: EngineKind;
@@ -21,7 +21,7 @@ export const EngineSwitch: React.FC<EngineSwitchProps> = ({ value, onChange, onM
         <button
             onClick={() => onChange(kind)}
             className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${value === kind
-                ? 'bg-[#00FF41]/15 text-[#00FF41] border border-[#00FF41]/30'
+                ? 'bg-[#3DF5A0]/15 text-[#3DF5A0] border border-[#3DF5A0]/30'
                 : 'text-slate-500 border border-transparent hover:text-slate-300'}`}
             title={hint}
             style={MONO}

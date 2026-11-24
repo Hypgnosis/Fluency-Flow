@@ -1,192 +1,196 @@
-import React, { useState, Suspense, lazy } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { LANGUAGES, LEVELS, languageMeta } from './shell/LearningSettings';
+import { Button, LangBadge, OptionTile, cx } from './ui/primitives';
+import { Icon, type IconName } from './ui/Icon';
+import { Wordmark } from './ui/Logo';
 
 const LanguageOrb = lazy(() => import('./LanguageOrb'));
 
-const LANGUAGES = ['English', 'Spanish', 'French', 'German', 'Italian', 'Japanese', 'Portuguese', 'Korean', 'Chinese', 'Russian', 'Slovak', 'Yucatec Mayan'];
-
-const LANGUAGE_FLAGS: Record<string, string> = {
-  'English': '🇺🇸', 'Spanish': '🇪🇸', 'French': '🇫🇷', 'German': '🇩🇪', 'Italian': '🇮🇹',
-  'Japanese': '🇯🇵', 'Portuguese': '🇧🇷', 'Korean': '🇰🇷', 'Chinese': '🇨🇳', 'Russian': '🇷🇺',
-  'Slovak': '🇸🇰', 'Yucatec Mayan': '🌿',
-};
-
 interface OnboardingPageProps {
-  onComplete: (nativeLanguage: string, learningLanguage: string) => void;
+    onComplete: (nativeLanguage: string, learningLanguage: string) => void;
 }
 
+const guessNativeLanguage = () => {
+    const code = (typeof navigator !== 'undefined' ? navigator.language : 'en').slice(0, 2).toLowerCase();
+    return LANGUAGES.find(l => l.code.toLowerCase() === code)?.name ?? 'English';
+};
+
+const FEATURES: { icon: IconName; title: string; body: string }[] = [
+    { icon: 'mic', title: 'Talk', body: 'Real conversations out loud. Your tutor answers, corrects gently and remembers.' },
+    { icon: 'camera', title: 'Lens', body: 'Point your camera at anything and learn what it is called.' },
+    { icon: 'pen', title: 'Write', body: 'Get your writing corrected, with the why explained in your language.' },
+    { icon: 'chip', title: 'Offline', body: 'Download a private model and keep practicing with no internet.' },
+];
+
+const STEPS = 4;
+
+/** First-run setup: what you learn, what you speak, your level, then a quick tour. */
 export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
-  const [step, setStep] = useState(0);
-  const [nativeLanguage, setNativeLanguage] = useState('English');
-  const [learningLanguage, setLearningLanguage] = useState('Spanish');
+    const [step, setStep] = useState(0);
+    const [learningLanguage, setLearningLanguage] = useState('Spanish');
+    const [nativeLanguage, setNativeLanguage] = useState(() => {
+        const guess = guessNativeLanguage();
+        return guess === 'Spanish' ? 'English' : guess;
+    });
+    const [level, setLevel] = useState('Beginner');
 
-  const handleComplete = () => {
-    localStorage.setItem('glossos_onboarded', 'true');
-    localStorage.setItem('glossos_native_lang', nativeLanguage);
-    localStorage.setItem('glossos_learning_lang', learningLanguage);
-    onComplete(nativeLanguage, learningLanguage);
-  };
+    const handleComplete = () => {
+        try {
+            localStorage.setItem('glossos_onboarded', 'true');
+            localStorage.setItem('glossos_native_lang', nativeLanguage);
+            localStorage.setItem('glossos_learning_lang', learningLanguage);
+            localStorage.setItem('glossos_level', level);
+        } catch { /* storage unavailable */ }
+        onComplete(nativeLanguage, learningLanguage);
+    };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-[#0A0A0B] flex flex-col items-center justify-center overflow-y-auto">
-      {/* Ambient blobs */}
-      <div className="ambient-blob ambient-blob-1" />
-      <div className="ambient-blob ambient-blob-2" />
+    const learn = languageMeta(learningLanguage);
+    const native = languageMeta(nativeLanguage);
 
-      <div className="relative z-10 w-full max-w-2xl mx-auto px-6 py-8 flex flex-col items-center">
+    const pickLearn = (name: string) => {
+        setLearningLanguage(name);
+        if (name === nativeLanguage) setNativeLanguage(name === 'English' ? 'Spanish' : 'English');
+    };
 
-        {/* Step 0: Welcome + Language Selection */}
-        {step === 0 && (
-          <div className="animate-fade-in w-full text-center">
-            {/* Logo */}
-            <div className="mb-6">
-              <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tighter" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
-                GLOSS<span className="text-[#FFBF00]">OS</span>
-              </h1>
-              <p className="text-[10px] text-slate-500 tracking-[0.25em] uppercase mt-1" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                Linguistic Mastery System
-              </p>
+    return (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-ink-950 text-slate-100">
+            <div className="pointer-events-none fixed inset-0" aria-hidden="true">
+                <div className="absolute -left-1/4 -top-1/3 h-[80vh] w-[80vh] rounded-full bg-[radial-gradient(circle,rgba(255,191,0,0.14),transparent_62%)] blur-3xl" />
+                <div className="absolute -bottom-1/3 -right-1/4 h-[80vh] w-[80vh] rounded-full bg-[radial-gradient(circle,rgba(61,245,160,0.08),transparent_60%)] blur-3xl" />
             </div>
 
-            <h2 className="text-xl sm:text-2xl font-bold text-white mb-2 tracking-tight" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
-              Configure Your Neural Profile
-            </h2>
-            <p className="text-slate-400 text-sm mb-8" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-              Select your languages to initialize the acquisition engine
-            </p>
-
-            {/* Language selectors */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8 text-left">
-              {/* Native Language */}
-              <div>
-                <label className="block text-[10px] uppercase tracking-[0.2em] text-[#00FF41] font-bold mb-3" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  I Speak
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {LANGUAGES.map(lang => (
-                    <button
-                      key={lang}
-                      onClick={() => setNativeLanguage(lang)}
-                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all border ${
-                        nativeLanguage === lang
-                          ? 'bg-[#00FF41]/10 border-[#00FF41]/30 text-[#00FF41] shadow-lg shadow-[#00FF41]/5'
-                          : 'bg-white/[0.02] border-white/[0.06] text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
-                      }`}
-                    >
-                      <span className="text-base">{LANGUAGE_FLAGS[lang]}</span>
-                      <span className="truncate">{lang}</span>
-                    </button>
-                  ))}
+            <div className="relative mx-auto flex min-h-full w-full max-w-2xl flex-col px-5 pb-8 pt-6 sm:px-8 sm:pt-10">
+                <div className="flex items-center justify-between">
+                    <Wordmark />
+                    <div className="flex items-center gap-1.5" aria-label={`Step ${step + 1} of ${STEPS}`}>
+                        {Array.from({ length: STEPS }, (_, i) => (
+                            <motion.span
+                                key={i}
+                                className={cx('h-1.5 rounded-full', i <= step ? 'bg-gold-400' : 'bg-white/10')}
+                                animate={{ width: i === step ? 22 : 6 }}
+                                transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                            />
+                        ))}
+                    </div>
                 </div>
-              </div>
 
-              {/* Learning Language */}
-              <div>
-                <label className="block text-[10px] uppercase tracking-[0.2em] text-[#FFBF00] font-bold mb-3" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  I Want to Learn
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {LANGUAGES.filter(l => l !== nativeLanguage).map(lang => (
-                    <button
-                      key={lang}
-                      onClick={() => setLearningLanguage(lang)}
-                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all border ${
-                        learningLanguage === lang
-                          ? 'bg-[#FFBF00]/10 border-[#FFBF00]/30 text-[#FFBF00] shadow-lg shadow-[#FFBF00]/5'
-                          : 'bg-white/[0.02] border-white/[0.06] text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
-                      }`}
-                    >
-                      <span className="text-base">{LANGUAGE_FLAGS[lang]}</span>
-                      <span className="truncate">{lang}</span>
-                    </button>
-                  ))}
+                <div className="flex flex-1 flex-col justify-center py-8">
+                    <AnimatePresence mode="wait">
+                        <motion.div
+                            key={step}
+                            initial={{ opacity: 0, x: 24 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -24 }}
+                            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                        >
+                            {step === 0 && (
+                                <>
+                                    <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">Which language do you want to learn?</h1>
+                                    <p className="mt-3 text-[15px] text-slate-400">You can change this any time.</p>
+                                    <div role="radiogroup" aria-label="Language to learn" className="mt-8 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                                        {LANGUAGES.map(l => (
+                                            <OptionTile
+                                                key={l.name}
+                                                selected={learningLanguage === l.name}
+                                                onSelect={() => pickLearn(l.name)}
+                                                leading={<LangBadge code={l.code} tone={learningLanguage === l.name ? 'gold' : 'slate'} />}
+                                                title={l.native}
+                                                description={l.native !== l.name ? l.name : undefined}
+                                            />
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+
+                            {step === 1 && (
+                                <>
+                                    <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">And which language do you speak?</h1>
+                                    <p className="mt-3 text-[15px] text-slate-400">Your tutor explains things in this language when you get stuck.</p>
+                                    <div role="radiogroup" aria-label="Your language" className="mt-8 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                                        {LANGUAGES.filter(l => l.name !== learningLanguage).map(l => (
+                                            <OptionTile
+                                                key={l.name}
+                                                selected={nativeLanguage === l.name}
+                                                onSelect={() => setNativeLanguage(l.name)}
+                                                leading={<LangBadge code={l.code} tone={nativeLanguage === l.name ? 'gold' : 'slate'} />}
+                                                title={l.native}
+                                                description={l.native !== l.name ? l.name : undefined}
+                                            />
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+
+                            {step === 2 && (
+                                <>
+                                    <h1 className="font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">How much {learn.name} do you know?</h1>
+                                    <p className="mt-3 text-[15px] text-slate-400">Your tutor adapts its pace and vocabulary to you.</p>
+                                    <div role="radiogroup" aria-label="Level" className="mt-8 space-y-2.5">
+                                        {LEVELS.map(l => (
+                                            <OptionTile
+                                                key={l.id}
+                                                selected={level === l.id}
+                                                onSelect={() => setLevel(l.id)}
+                                                title={l.label}
+                                                description={l.description}
+                                                className="py-4"
+                                            />
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+
+                            {step === 3 && (
+                                <>
+                                    <div className="h-[220px] sm:h-[260px]">
+                                        <Suspense fallback={<div className="h-full" />}>
+                                            <LanguageOrb nativeLanguage={nativeLanguage} learningLanguage={learningLanguage} />
+                                        </Suspense>
+                                    </div>
+                                    <div className="text-center">
+                                        <p className="inline-flex items-center gap-2 text-sm text-slate-400">
+                                            <LangBadge code={native.code} size="sm" /> {native.native}
+                                            <Icon name="arrowRight" size={14} className="text-gold-400" />
+                                            <LangBadge code={learn.code} tone="gold" size="sm" /> <span className="text-white">{learn.native}</span>
+                                        </p>
+                                        <h1 className="mt-3 font-display text-3xl font-bold tracking-tight text-white sm:text-4xl">You’re all set</h1>
+                                        <p className="mx-auto mt-3 max-w-md text-[15px] text-slate-400">Here is what you can do with Glossos.</p>
+                                    </div>
+                                    <div className="mt-7 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                                        {FEATURES.map((f, i) => (
+                                            <motion.div
+                                                key={f.title}
+                                                initial={{ opacity: 0, y: 10 }}
+                                                animate={{ opacity: 1, y: 0 }}
+                                                transition={{ delay: 0.1 + i * 0.07 }}
+                                                className="flex gap-3.5 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4"
+                                            >
+                                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gold-500/10 text-gold-400"><Icon name={f.icon} size={20} /></span>
+                                                <span>
+                                                    <span className="block font-display font-semibold text-white">{f.title}</span>
+                                                    <span className="mt-0.5 block text-sm leading-snug text-slate-400">{f.body}</span>
+                                                </span>
+                                            </motion.div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </motion.div>
+                    </AnimatePresence>
                 </div>
-              </div>
-            </div>
 
-            <button
-              onClick={() => setStep(1)}
-              className="px-8 py-3.5 bg-gradient-to-r from-[#FFBF00] to-[#00FF41] hover:from-[#FFBF00]/90 hover:to-[#00FF41]/90 text-black font-bold rounded-xl transition-all uppercase tracking-wider text-sm shadow-lg shadow-[#FFBF00]/20"
-            >
-              Continue →
-            </button>
-          </div>
-        )}
-
-        {/* Step 1: 3D Orb + Instructions */}
-        {step === 1 && (
-          <div className="animate-fade-in w-full text-center">
-            {/* 3D Language Orb */}
-            <div className="w-full h-[280px] sm:h-[340px] mb-6">
-              <Suspense fallback={
-                <div className="w-full h-full flex items-center justify-center">
-                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#FFBF00]/10 to-[#00FF41]/10 animate-breathe" />
+                <div className="flex items-center justify-between gap-3">
+                    {step > 0 ? (
+                        <Button variant="ghost" size="lg" onClick={() => setStep(step - 1)}>Back</Button>
+                    ) : <span />}
+                    {step < STEPS - 1 ? (
+                        <Button variant="primary" size="lg" iconRight="arrowRight" onClick={() => setStep(step + 1)}>Continue</Button>
+                    ) : (
+                        <Button variant="primary" size="lg" iconRight="arrowRight" onClick={handleComplete}>Start learning</Button>
+                    )}
                 </div>
-              }>
-                <LanguageOrb nativeLanguage={nativeLanguage} learningLanguage={learningLanguage} />
-              </Suspense>
             </div>
-
-            <h2 className="text-xl sm:text-2xl font-bold text-white mb-2 tracking-tight" style={{ fontFamily: "'Inter Tight', sans-serif" }}>
-              {LANGUAGE_FLAGS[nativeLanguage]} {nativeLanguage} → {LANGUAGE_FLAGS[learningLanguage]} {learningLanguage}
-            </h2>
-            <p className="text-slate-400 text-sm mb-8 max-w-md mx-auto" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-              Your linguistic bridge is configured. Here's how GLOSSOS works:
-            </p>
-
-            {/* Instructions */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8 text-left">
-              <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-5 hover:border-[#00FF41]/20 transition-colors">
-                <div className="w-10 h-10 rounded-xl bg-[#00FF41]/10 border border-[#00FF41]/20 flex items-center justify-center text-[#00FF41] font-bold mb-3">1</div>
-                <h3 className="text-white font-semibold text-sm mb-1.5" style={{ fontFamily: "'Inter Tight', sans-serif" }}>Initialize Sync</h3>
-                <p className="text-slate-500 text-xs leading-relaxed" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  Tap the microphone button to connect to your AI language tutor in real-time.
-                </p>
-              </div>
-
-              <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-5 hover:border-[#FFBF00]/20 transition-colors">
-                <div className="w-10 h-10 rounded-xl bg-[#FFBF00]/10 border border-[#FFBF00]/20 flex items-center justify-center text-[#FFBF00] font-bold mb-3">2</div>
-                <h3 className="text-white font-semibold text-sm mb-1.5" style={{ fontFamily: "'Inter Tight', sans-serif" }}>Speak Freely</h3>
-                <p className="text-slate-500 text-xs leading-relaxed" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  Speak in {learningLanguage}. Your tutor will respond, correct your pronunciation, and guide you.
-                </p>
-              </div>
-
-              <div className="bg-white/[0.02] border border-white/[0.06] rounded-2xl p-5 hover:border-[#F5F5F7]/10 transition-colors">
-                <div className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-white font-bold mb-3">3</div>
-                <h3 className="text-white font-semibold text-sm mb-1.5" style={{ fontFamily: "'Inter Tight', sans-serif" }}>Track Progress</h3>
-                <p className="text-slate-500 text-xs leading-relaxed" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                  Your sessions are saved. Review vocabulary, pronunciation scores, and cognitive analytics.
-                </p>
-              </div>
-            </div>
-
-            {/* Tips */}
-            <div className="bg-[#00FF41]/[0.03] border border-[#00FF41]/10 rounded-xl px-5 py-4 mb-8 text-left max-w-md mx-auto">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#00FF41] font-bold mb-2" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                Pro Tip
-              </p>
-              <p className="text-slate-400 text-xs leading-relaxed" style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-                Use the <strong className="text-white">Help Me</strong> button if you get stuck. GLOSSOS will explain in {nativeLanguage} and suggest a response in {learningLanguage}.
-              </p>
-            </div>
-
-            <div className="flex gap-3 justify-center">
-              <button
-                onClick={() => setStep(0)}
-                className="px-6 py-3 bg-white/[0.04] border border-white/[0.08] text-slate-300 font-medium rounded-xl transition-all hover:bg-white/[0.06] text-sm"
-              >
-                ← Back
-              </button>
-              <button
-                onClick={handleComplete}
-                className="px-8 py-3 bg-gradient-to-r from-[#FFBF00] to-[#00FF41] hover:from-[#FFBF00]/90 hover:to-[#00FF41]/90 text-black font-bold rounded-xl transition-all uppercase tracking-wider text-sm shadow-lg shadow-[#FFBF00]/20"
-              >
-                Begin Acquisition →
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+        </div>
+    );
 }

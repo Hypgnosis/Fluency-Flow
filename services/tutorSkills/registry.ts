@@ -71,22 +71,37 @@ export interface ToolCallOutcome {
 }
 
 /** Runs a batch of calls against the given skills. Never throws: failures become error responses. */
+/**
+ * Longest a live tool may take. The voice model stays silent until it gets the tool's answer,
+ * so a slow lookup must give up and let the conversation continue.
+ */
+export const LIVE_TOOL_TIMEOUT_MS = 3500;
+
 export async function executeToolCalls(
     calls: LiveFunctionCall[],
     skills: TutorSkill[],
     ctx: SkillContext,
+    timeoutMs: number = LIVE_TOOL_TIMEOUT_MS,
 ): Promise<ToolCallOutcome> {
     const outcomes = await Promise.all(calls.map(async call => {
         const skill = findSkill(call.name, skills);
         if (!skill) {
             return { response: { id: call.id, name: call.name, response: { error: `Unknown tool: ${call.name}` } } };
         }
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-            const result = await skill.run(call.args ?? {}, ctx);
+            const result = await Promise.race([
+                skill.run(call.args ?? {}, ctx),
+                new Promise<never>((_, reject) => {
+                    timer = setTimeout(() => reject(new Error('The lookup took too long. Continue the conversation without it.')), timeoutMs);
+                }),
+            ]);
             return { response: { id: call.id, name: call.name, response: result.response }, attachment: result.attachment };
         } catch (err) {
             console.warn(`[GLOSSOS-SKILLS] ${call.name} failed:`, err);
             return { response: { id: call.id, name: call.name, response: { error: (err as Error).message || 'Tool failed' } } };
+        } finally {
+            if (timer) clearTimeout(timer);
         }
     }));
     return {

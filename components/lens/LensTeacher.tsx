@@ -9,7 +9,7 @@ import { isDue } from '../../services/srs';
 import { stopSpeaking } from '../../services/speech';
 import { useAuth } from '../AuthModal';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 type Tab = 'lens' | 'saved' | 'study';
 
 const PERSONA_KEY = 'glossos_lens_persona';
@@ -103,7 +103,7 @@ export const LensTeacher: React.FC<LensTeacherProps> = ({ nativeLanguage, learnL
                 : 'text-slate-500 border border-transparent hover:text-slate-300'}`}
             style={MONO}
         >
-            {label}{badge ? <span className="ml-1.5 text-[10px] text-[#00FF41]">{badge}</span> : null}
+            {label}{badge ? <span className="ml-1.5 text-[10px] text-[#3DF5A0]">{badge}</span> : null}
         </button>
     );
 
@@ -128,7 +128,7 @@ export const LensTeacher: React.FC<LensTeacherProps> = ({ nativeLanguage, learnL
                         </select>
                         <button
                             onClick={() => { const m = !muted; setMuted(m); writePref(MUTED_KEY, String(m)); if (m) stopSpeaking(); }}
-                            className={`p-1.5 rounded-full border ${muted ? 'border-white/[0.08] text-slate-600' : 'border-[#00FF41]/30 text-[#00FF41]'}`}
+                            className={`p-1.5 rounded-full border ${muted ? 'border-white/[0.08] text-slate-600' : 'border-[#3DF5A0]/30 text-[#3DF5A0]'}`}
                             title={muted ? 'Voice off' : 'Voice on'}
                             aria-label={muted ? 'Turn voice on' : 'Turn voice off'}
                         >

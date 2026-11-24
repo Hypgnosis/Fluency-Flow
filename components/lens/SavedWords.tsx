@@ -4,7 +4,7 @@ import { VocabCardView } from './VocabCardView';
 import { localeFor } from '../../services/languages';
 import { isDue } from '../../services/srs';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 interface SavedWordsProps {
     words: SavedWord[];
@@ -53,7 +53,7 @@ export const SavedWords: React.FC<SavedWordsProps> = ({ words, loading, onDelete
                 </div>
                 <button
                     onClick={onStudy}
-                    className="px-4 py-2 rounded-full bg-[#00FF41]/10 border border-[#00FF41]/30 text-[#00FF41] text-xs font-bold hover:bg-[#00FF41]/20"
+                    className="px-4 py-2 rounded-full bg-[#3DF5A0]/10 border border-[#3DF5A0]/30 text-[#3DF5A0] text-xs font-bold hover:bg-[#3DF5A0]/20"
                     style={MONO}
                 >
                     Study{dueCount ? ` · ${dueCount} due` : ''}

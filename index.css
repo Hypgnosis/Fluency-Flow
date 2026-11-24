@@ -4,6 +4,35 @@
 @import "tailwindcss";
 
 /* ========================================================
+   GLOSSOS design tokens (Tailwind v4 theme → utilities like bg-ink-900, text-gold-500, font-display)
+   ======================================================== */
+@theme {
+    --color-ink-950: #0A0A0B;
+    --color-ink-900: #0E0E11;
+    --color-ink-850: #121216;
+    --color-ink-800: #17171C;
+    --color-ink-700: #1F1F26;
+    --color-ink-600: #2A2A33;
+    --color-ink-500: #3A3A45;
+    --color-gold-200: #FFF0C2;
+    --color-gold-300: #FFE08A;
+    --color-gold-400: #FFCC33;
+    --color-gold-500: #FFBF00;
+    --color-gold-600: #E0A800;
+    --color-gold-700: #A87E00;
+    --color-mint-300: #8BFAC9;
+    --color-mint-400: #3DF5A0;
+    --color-mint-500: #1FD98A;
+    --color-mint-600: #12A86A;
+    --font-display: 'Inter Tight', 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'JetBrains Mono', monospace;
+    --radius-card: 1.25rem;
+    --shadow-glow-gold: 0 0 0 1px rgba(255, 191, 0, 0.25), 0 10px 40px -10px rgba(255, 191, 0, 0.45);
+    --shadow-card: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 20px 50px -24px rgba(0, 0, 0, 0.8);
+}
+
+/* ========================================================
    GLOSSOS — Clinical Minimalism Design System
    ======================================================== */
 
@@ -12,7 +41,7 @@
    ======================================================== */
 :root {
     --obsidian: #0A0A0B;
-    --terminal-green: #00FF41;
+    --terminal-green: #3DF5A0;
     --sacred-amber: #FFBF00;
     --vellum-white: #F5F5F7;
     --glass-border: rgba(255, 255, 255, 0.03);
@@ -121,8 +150,8 @@ h1, h2, .heading-tight {
 }
 
 @keyframes terminal-glow {
-    0%, 100% { text-shadow: 0 0 8px rgba(0, 255, 65, 0.3); }
-    50% { text-shadow: 0 0 16px rgba(0, 255, 65, 0.5), 0 0 32px rgba(0, 255, 65, 0.15); }
+    0%, 100% { text-shadow: 0 0 8px rgba(61, 245, 160, 0.3); }
+    50% { text-shadow: 0 0 16px rgba(61, 245, 160, 0.5), 0 0 32px rgba(61, 245, 160, 0.15); }
 }
 
 @keyframes amber-pulse {
@@ -234,7 +263,7 @@ h1, h2, .heading-tight {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 255, 65, 0.15);
+    background: rgba(61, 245, 160, 0.15);
 }
 
 /* ========================================================
@@ -244,7 +273,7 @@ h1, h2, .heading-tight {
 .sound-wave-bar {
     width: 3px;
     border-radius: 999px;
-    background: linear-gradient(to top, rgba(0, 255, 65, 0.7), rgba(255, 191, 0, 0.6));
+    background: linear-gradient(to top, rgba(61, 245, 160, 0.7), rgba(255, 191, 0, 0.6));
 }
 
 .sound-wave-bar:nth-child(1) { animation: wave-1 1.2s ease-in-out infinite; }
@@ -260,7 +289,7 @@ h1, h2, .heading-tight {
 .mic-outer-ring {
     background: conic-gradient(from 0deg,
             rgba(255, 191, 0, 0.5),
-            rgba(0, 255, 65, 0.3),
+            rgba(61, 245, 160, 0.3),
             rgba(255, 191, 0, 0.2),
             rgba(255, 191, 0, 0.5));
     animation: rotate-slow 8s linear infinite;
@@ -306,7 +335,7 @@ h1, h2, .heading-tight {
     left: -10%;
     width: 50%;
     height: 50%;
-    background: radial-gradient(circle, rgba(0, 255, 65, 0.4), transparent 70%);
+    background: radial-gradient(circle, rgba(61, 245, 160, 0.4), transparent 70%);
 }
 
 .ambient-blob-2 {
@@ -322,7 +351,7 @@ h1, h2, .heading-tight {
     right: 15%;
     width: 30%;
     height: 30%;
-    background: radial-gradient(circle, rgba(0, 255, 65, 0.2), transparent 70%);
+    background: radial-gradient(circle, rgba(61, 245, 160, 0.2), transparent 70%);
     opacity: 0.03;
 }
 
@@ -337,7 +366,7 @@ h1, h2, .heading-tight {
 
 /* The Bridge — Terminal Green glow */
 .theme-bridge .ambient-blob-1 {
-    background: radial-gradient(circle, rgba(0, 255, 65, 0.5), transparent 70%);
+    background: radial-gradient(circle, rgba(61, 245, 160, 0.5), transparent 70%);
     opacity: 0.08;
 }
 
@@ -384,7 +413,7 @@ h1, h2, .heading-tight {
 .glossos-md ul { list-style: disc; }
 .glossos-md ol { list-style: decimal; }
 .glossos-md li { margin: 0.15rem 0; }
-.glossos-md strong { color: #00FF41; font-weight: 600; }
+.glossos-md strong { color: #3DF5A0; font-weight: 600; }
 .glossos-md h3, .glossos-md h4, .glossos-md h5, .glossos-md h6 { font-weight: 700; color: #fff; margin: 0.6rem 0 0.3rem; }
 .glossos-md code { font-family: 'IBM Plex Mono', monospace; font-size: 0.85em; background: rgba(255,255,255,0.06); padding: 0.05rem 0.3rem; border-radius: 0.25rem; }
 .glossos-md pre { background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.05); border-radius: 0.75rem; padding: 0.75rem; overflow-x: auto; }

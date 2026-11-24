@@ -93,6 +93,78 @@ export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch): 
  * In development, falls back to a direct Gemini connection.
  * Returns a promise that resolves to a session-like object.
  */
+/**
+ * How the voice tutor behaves. Written for speech: short turns, no formatting read aloud,
+ * one correction at a time. (The previous 4k-character prompt made replies ~0.4 s slower and
+ * long-winded, and the tutor read "[In English: ...]" brackets out loud.)
+ */
+export function buildTutorInstruction(language: string, nativeLanguage: string, level: string): string {
+  if (language === nativeLanguage) {
+    return `You are Glossos, a friendly ${language} conversation coach talking out loud with a native speaker who wants to express themselves better.
+- This is a spoken conversation. Keep every turn short: one to three sentences, then hand the turn back, usually with a question.
+- Never read out formatting, lists, brackets or labels.
+- Help them find richer words and more natural phrasing. Offer at most one suggestion per turn.`;
+  }
+  const levelGuide = level === 'Advanced'
+    ? `The learner is advanced.
+- Speak only ${language}, at native speed, with idioms and natural expressions.
+- Use ${nativeLanguage} only if they ask for it.`
+    : level === 'Intermediate'
+      ? `The learner is intermediate.
+- Speak mostly ${language}, at a natural pace, with everyday vocabulary.
+- Switch to ${nativeLanguage} only for a quick explanation when they are stuck, then go back to ${language}.`
+      : `The learner is a beginner.
+- Use very short, simple sentences and the most common words.
+- Mix in ${nativeLanguage} naturally: say a ${language} phrase, then say what it means in ${nativeLanguage}. Just say it; never use brackets or labels.
+- If they hesitate, seem lost, or answer in ${nativeLanguage}, explain briefly in ${nativeLanguage} and give them an easy phrase to say back.`;
+
+  return `You are Glossos, a warm and patient ${language} tutor having a spoken conversation with a ${nativeLanguage} speaker.
+
+HOW TO TALK
+- This is a live voice conversation. Keep every turn short: one to three sentences, then hand the turn back, usually with one simple question.
+- Never lecture or list. Never read out formatting, brackets, labels or stage directions.
+- Sound like an encouraging friend, not a textbook.
+
+${levelGuide}
+
+CORRECTIONS
+- When they make a mistake, say their sentence back the right way, then give the reason in a few words${level === 'Advanced' ? '' : ` of ${nativeLanguage}`}. Correct only the most important mistake in each turn.
+- If a word was clearly mispronounced, say it slowly once and invite them to repeat it.
+
+KEEP IT GOING
+- Talk about their day, their interests, or a simple role-play (ordering at a café, asking for directions, checking into a hotel). Introduce one or two useful new words at a time.
+- If they ask for help, explain in ${nativeLanguage}, then suggest a simple reply they can say in ${language}.`;
+}
+
+/** What the app says to the tutor when a session opens, so the tutor greets the learner first. */
+export function kickoffPrompt(language: string, nativeLanguage: string, level: string): string {
+  const help = level === 'Beginner' && language !== nativeLanguage ? ` Then say what it means in ${nativeLanguage}.` : '';
+  return `(The learner just started a voice session. Greet them in ${language} with one short, friendly sentence and ask one easy question to get them talking.${help})`;
+}
+
+// ─── Connection prefetch ─────────────────────────────────────────────────
+// Minting a Live token takes 0.4-1.3 s (plus a Netlify cold start), so the Talk page asks for one
+// as soon as it opens. Tokens must be used within 60 s; prefetched ones are dropped after 45 s.
+const PREFETCH_MAX_AGE_MS = 45_000;
+let prefetched: { url: Promise<string>; at: number } | null = null;
+
+/** Starts getting a Live connection URL (token) in the background. Safe to call repeatedly. */
+export function prefetchLiveConnection(): void {
+  if (prefetched && Date.now() - prefetched.at < PREFETCH_MAX_AGE_MS) return;
+  const url = resolveLiveWebSocketUrl();
+  const entry = { url, at: Date.now() };
+  url.catch(() => { if (prefetched === entry) prefetched = null; });
+  prefetched = entry;
+}
+
+/** A prefetched URL if it is still fresh (each token works once), otherwise a new one. */
+function takeLiveWebSocketUrl(): Promise<string> {
+  const entry = prefetched;
+  prefetched = null;
+  if (entry && Date.now() - entry.at < PREFETCH_MAX_AGE_MS) return entry.url.catch(() => resolveLiveWebSocketUrl());
+  return resolveLiveWebSocketUrl();
+}
+
 export async function startLiveSession(
   callbacks: GeminiCallbacks,
   language: string,
@@ -103,90 +175,7 @@ export async function startLiveSession(
   tools?: LiveTools
 ): Promise<LiveSession> {
 
-  const levelInstructions = {
-    'Beginner': `The user is a COMPLETE BEGINNER. Follow these rules strictly:
-
-SENTENCE LENGTH: Keep EVERY sentence to 3-7 words maximum. Never say long sentences. Break complex ideas into multiple tiny sentences.
-
-SPEED: Speak at a natural, native pace (do NOT slow down artificially or over-enunciate). Use connected speech like a native speaker (e.g., say 'Hayadooin' not 'How are you doing').
-
-VOCABULARY: Use only the 300 most common words. If you MUST use a word outside this range, IMMEDIATELY say it again in ${nativeLanguage} right after.
-
-MANDATORY NATIVE LANGUAGE SCAFFOLDING: After every 2-3 exchanges, you MUST pause and give a brief explanation or summary in ${nativeLanguage}. Say something like: "[In ${nativeLanguage}: What I just said means... / Great job! You said... / Let me explain...]" Then continue in ${language}. Do NOT wait for the user to ask for help — proactively explain.
-
-WHEN THE USER IS SILENT OR CONFUSED: If the user pauses for more than a moment, seems hesitant, or gives an incorrect response, IMMEDIATELY switch to ${nativeLanguage} to explain what you said, what it means, and suggest what they should say. Then repeat the ${language} phrase slowly.
-
-CORRECTIONS: Correct EVERY mistake gently. First say the correct form in ${language}, then briefly explain why in ${nativeLanguage}.
-
-FORMAT: Alternate frequently between ${language} and ${nativeLanguage}. A beginner needs constant reassurance and translation support. Never leave them confused.
-
-EXAMPLE EXCHANGE:
-Tutor: "Bonjour! Ca va?" [In English: That means 'Hello! How are you?'. You can answer 'Ca va bien' which means 'I'm fine'.]
-User: "Sa va bee-en"
-Tutor: "Tres bien! 'Ca va bien' — perfect!" [In English: Great job! You said 'I'm fine' correctly.]`,
-    'Intermediate': `The user is at an intermediate level. Speak at a completely natural, native speed using everyday conversational flow and connected speech. You can use more varied vocabulary but avoid very obscure idioms. Correct major grammatical errors but let minor ones slide to maintain flow. If the user seems stuck on a concept, briefly explain in ${nativeLanguage} before continuing in ${language}. Aim for sentences of 5-12 words.`,
-    'Advanced': 'The user is an advanced learner. Speak at a completely natural, native speed. Use sophisticated vocabulary, idioms, slang, and fully connected native speech patterns. Only correct subtle mistakes or unnatural phrasing.',
-  };
-
-  const selectedLevelInstruction = levelInstructions[proficiencyLevel as keyof typeof levelInstructions] || levelInstructions['Beginner'];
-
-  const phoneticInstructions = `
-
-PRONUNCIATION FEEDBACK REQUIREMENTS:
-When you detect pronunciation issues, provide detailed phonetic analysis:
-1. Identify the specific phoneme(s) that need improvement
-2. Explain what went wrong
-3. Describe the correct tongue and mouth positioning in simple terms
-4. Compare to a similar sound in ${nativeLanguage} if helpful
-5. Suggest 2-3 practice words that emphasize this sound
-6. Rate the difficulty: easy, medium, or hard
-
-Example format:
-"I noticed your Spanish 'rr' sounded like an English 'r'. For the trilled 'rr', place your tongue against your upper teeth and let it vibrate. It's similar to the 'tt' sound in 'butter'. Try practicing: 'perro', 'carro', 'ferrocarril'. This is a medium difficulty sound."
-
-Also provide:
-- What they did well (strengths)
-- Quick improvement tips (2-3 actionable points)
-- Overall accuracy percentage if possible
-`;
-
-  const situationalSceneInstructions = `
-
-SITUATIONAL TEACHING (AUDIO-VISUAL):
-To make learning more immersive, regularly create vivid situational scenarios that help the learner practice real-world conversations. Describe scenes in detail so they can visualize the context:
-
-Examples of great situational prompts:
-- "Imagine you're at a cozy cafe in the morning, ordering your favorite breakfast..."
-- "You're at a busy market, looking at fresh fruits and vegetables..."
-- "Picture yourself checking in at a hotel reception desk..."
-- "You're at the train station, trying to buy a ticket to the next city..."
-- "Imagine you're at a restaurant with friends, ready to order dinner..."
-
-When introducing new vocabulary or practice scenarios:
-1. Set the scene with vivid, descriptive language about the location and atmosphere
-2. Describe what you can see, hear, and smell in the environment
-3. Present 2-3 useful phrases the learner would need in that situation
-4. Ask them to practice responding as if they were there
-5. Use scenario-based follow-up questions to deepen engagement
-
-This creates an immersive experience where the learner can connect words to real situations.
-`;
-
-  const immersionRule = proficiencyLevel === 'Beginner'
-    ? `You will FREQUENTLY alternate between ${language} and ${nativeLanguage}. Teach in both languages. Every few sentences in ${language}, pause and explain or summarize in ${nativeLanguage}. The user is a beginner and NEEDS constant ${nativeLanguage} support — do not wait for them to ask.`
-    : proficiencyLevel === 'Intermediate'
-      ? `Speak primarily in ${language}. If the user seems confused or stuck, briefly switch to ${nativeLanguage} to explain, then continue in ${language}.`
-      : `Speak ONLY in ${language}. Full immersion. Only use ${nativeLanguage} if the user explicitly asks for clarification.`;
-
-  const openingLine = proficiencyLevel === 'Advanced'
-    ? `Begin with: "Inmersion Total. Motor dialectico activado." for Spanish or the equivalent in the target language. Do not offer help or simplification.`
-    : proficiencyLevel === 'Intermediate'
-      ? `Begin with: "Engaging fluidity protocols. Focus on conversational cadence."`
-      : `Begin with a very short, simple greeting in ${language}, then IMMEDIATELY explain in ${nativeLanguage} what you just said and how the user should respond. Keep it warm and encouraging.`;
-
-  const baseInstruction = language === nativeLanguage
-    ? `You are GLOSSOS, an elite linguistic mastery system. The user wants to practice ${language} (their native language). Focus on advanced vocabulary, public speaking skills, and dialectical mastery. Level: ${proficiencyLevel}. ${selectedLevelInstruction} Keep your responses concise and clinical.${phoneticInstructions}${situationalSceneInstructions}`
-    : `You are GLOSSOS, an elite linguistic mastery system. The user is a ${nativeLanguage} speaker acquiring ${language}. Level: ${proficiencyLevel}. ${selectedLevelInstruction} ${immersionRule} Keep your responses concise and precise, and ask questions to maintain conversational cadence. ${openingLine} ${phoneticInstructions}${situationalSceneInstructions}`;
+  const baseInstruction = buildTutorInstruction(language, nativeLanguage, proficiencyLevel);
 
   const systemInstruction = [baseInstruction, userContext, tools?.instructions]
     .filter(Boolean)
@@ -221,12 +210,15 @@ This creates an immersive experience where the learner can connect words to real
   /** Opens one WebSocket for `model`. Resolves with the session, or with why it failed before setup. */
   const attempt = async (model: string): Promise<Attempt> => {
     // Throws (no retry) if we cannot get a URL/token, e.g. signed out or server not configured.
-    const wsUrl = await resolveLiveWebSocketUrl();
+    const wsUrl = await takeLiveWebSocketUrl();
 
     return new Promise<Attempt>(resolve => {
       let ready = false;
       console.log(`[GLOSSOS] Opening WebSocket connection (${model})...`);
       const ws = new WebSocket(wsUrl);
+      // ArrayBuffer frames decode synchronously, so server messages (and audio chunks) are
+      // handled strictly in arrival order. Blob frames needed an async read that could reorder them.
+      ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
         console.log('[GLOSSOS] [OK] WebSocket OPEN — sending setup...');
@@ -238,7 +230,7 @@ This creates an immersive experience where the learner can connect words to real
         try {
           if (typeof event.data === 'string') {
             data = JSON.parse(event.data);
-          } else if (event.data instanceof Blob) {
+          } else if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
             const text = await event.data.text();
             data = JSON.parse(text);
           } else {
@@ -275,16 +267,11 @@ This creates an immersive experience where the learner can connect words to real
                 console.log('[GLOSSOS] Cannot send text: WebSocket not open');
                 return;
               }
-              const msg = {
-                clientContent: {
-                  turns: [{
-                    role: 'user',
-                    parts: [{ text: text }]
-                  }],
-                  turnComplete: true
-                }
-              };
-              console.log('[GLOSSOS] Sending text to Gemini:', JSON.stringify(msg));
+              // Gemini 3 Live models take text mid-conversation as realtimeInput.text;
+              // clientContent turns are only for seeding history there. 2.5 models use clientContent.
+              const msg = model.startsWith('gemini-2.')
+                ? { clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } }
+                : { realtimeInput: { text } };
               ws.send(JSON.stringify(msg));
             },
             sendToolResponse: (functionResponses: LiveFunctionResponse[]) => {

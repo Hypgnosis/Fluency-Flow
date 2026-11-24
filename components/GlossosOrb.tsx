@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 // ─── GLOSSOS Color Palette ───
 const COLORS = {
-  terminalGreen: new THREE.Color('#00FF41'),
+  terminalGreen: new THREE.Color('#3DF5A0'),
   sacredAmber: new THREE.Color('#FFBF00'),
   vellumWhite: new THREE.Color('#F5F5F7'),
   error: new THREE.Color('#f43f5e'),
@@ -150,7 +150,7 @@ function WireframeShell({ connectionState, volume }: OrbProps) {
     <mesh ref={meshRef}>
       <icosahedronGeometry args={[1, 1]} />
       <meshBasicMaterial
-        color={connectionState === 'CONNECTED' ? '#00FF41' : '#FFBF00'}
+        color={connectionState === 'CONNECTED' ? '#3DF5A0' : '#FFBF00'}
         wireframe
         transparent
         opacity={0.12}
@@ -173,7 +173,7 @@ function OrbitalRing({ connectionState, volume }: OrbProps) {
     ringRef.current.scale.setScalar(pulse);
   });
 
-  const color = connectionState === 'CONNECTED' ? '#00FF41' : '#FFBF00';
+  const color = connectionState === 'CONNECTED' ? '#3DF5A0' : '#FFBF00';
 
   return (
     <mesh ref={ringRef}>
@@ -223,7 +223,7 @@ function Particles({ connectionState, volume }: OrbProps) {
           <mesh key={i} position={[Math.cos(angle) * r, Math.sin(angle * 0.5) * 0.3, Math.sin(angle) * r]}>
             <sphereGeometry args={[0.04, 8, 8]} />
             <meshBasicMaterial
-              color={i % 2 === 0 ? '#00FF41' : '#FFBF00'}
+              color={i % 2 === 0 ? '#3DF5A0' : '#FFBF00'}
               transparent
               opacity={connectionState === 'CONNECTED' ? 0.6 + volume * 0.4 : 0.45}
             />
@@ -256,7 +256,7 @@ function Scene({ connectionState, volume, aiAnalyser }: OrbProps) {
       {/* Simple lighting — no Environment preset needed */}
       <ambientLight intensity={0.6} />
       <directionalLight position={[5, 5, 5]} intensity={0.4} color="#FFBF00" />
-      <directionalLight position={[-4, -2, -3]} intensity={0.2} color="#00FF41" />
+      <directionalLight position={[-4, -2, -3]} intensity={0.2} color="#3DF5A0" />
       <pointLight position={[0, 3, 2]} intensity={0.3} color="#fff" />
 
       <Float
@@ -278,7 +278,7 @@ function Scene({ connectionState, volume, aiAnalyser }: OrbProps) {
         scale={10}
         blur={3}
         far={4}
-        color={connectionState === 'CONNECTED' ? '#00FF41' : '#FFBF00'}
+        color={connectionState === 'CONNECTED' ? '#3DF5A0' : '#FFBF00'}
       />
     </>
   );

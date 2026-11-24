@@ -1,3 +1,4 @@
+import { languageMeta } from '../shell/LearningSettings';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { chatTutorSystemPrompt } from '../../services/tutorPrompts';
 import { engineReady, streamReply, type ReplyStats } from '../../services/textEngine';
@@ -10,7 +11,7 @@ import { EngineSwitch } from '../offline/EngineSwitch';
 import { useEnginePreference } from '../offline/useOnDevice';
 import { StatsLine } from './StatsLine';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 /** Older turns are dropped from the prompt so small on-device context windows never overflow. */
 const MAX_HISTORY_TURNS = 16;
 
@@ -36,7 +37,7 @@ const Bubble: React.FC<{ message: ChatMessage; streaming?: boolean; speaking?: b
         <div className={message.role === 'user' ? 'text-right' : 'text-left'}>
             <div className={`inline-block max-w-[88%] px-4 py-3 rounded-2xl text-sm leading-relaxed border text-left ${message.role === 'user'
                 ? 'rounded-br-md bg-[#161616]/90 border-white/[0.08] text-[#F5F5F7]'
-                : 'rounded-bl-md bg-[#0d0d0e]/90 border-[#00FF41]/[0.08] text-[#F5F5F7]'}`}>
+                : 'rounded-bl-md bg-[#0d0d0e]/90 border-[#3DF5A0]/[0.08] text-[#F5F5F7]'}`}>
                 {message.role === 'user'
                     ? message.text
                     : <div className="glossos-md" dangerouslySetInnerHTML={{ __html: html || (streaming ? '<p>…</p>' : '') }} />}
@@ -44,7 +45,7 @@ const Bubble: React.FC<{ message: ChatMessage; streaming?: boolean; speaking?: b
             {message.role === 'model' && !streaming && message.text && (
                 <div className="mt-1 flex items-center gap-2">
                     {onSpeak && (
-                        <button onClick={onSpeak} className={`text-[11px] ${speaking ? 'text-[#00FF41]' : 'text-slate-500 hover:text-slate-300'}`} style={MONO}
+                        <button onClick={onSpeak} className={`text-[11px] ${speaking ? 'text-[#3DF5A0]' : 'text-slate-500 hover:text-slate-300'}`} style={MONO}
                             aria-label={speaking ? 'Stop reading' : 'Read aloud'}>
                             {speaking ? '■ Stop' : '🔊 Read aloud'}
                         </button>
@@ -188,7 +189,7 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
     };
 
     const starters = [
-        `¡Hola! Quiero practicar ${learnLanguage}.`,
+        languageMeta(learnLanguage).hello || `Hi! I want to practice ${learnLanguage}.`,
         'Help me prepare for a job interview.',
         'Let\'s role-play ordering food at a restaurant.',
     ];
@@ -196,10 +197,10 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
     return (
         <div className="flex flex-col h-full min-h-0">
             <div className="px-4 sm:px-6 py-2 border-b border-white/[0.04] flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold" style={MONO}>Chat tutor</span>
+                <span className="text-sm text-slate-400">Write in {learnLanguage}. Your tutor answers and corrects.</span>
                 <div className="flex items-center gap-3">
                     {isTtsSupported() && (
-                        <button onClick={toggleAutoRead} className={`text-[11px] ${autoRead ? 'text-[#00FF41]' : 'text-slate-500 hover:text-slate-300'}`} style={MONO}
+                        <button onClick={toggleAutoRead} className={`text-[11px] ${autoRead ? 'text-[#3DF5A0]' : 'text-slate-500 hover:text-slate-300'}`} style={MONO}
                             title="Read every reply aloud" aria-pressed={autoRead}>
                             {autoRead ? '🔊 Auto-read on' : '🔈 Auto-read off'}
                         </button>
@@ -248,11 +249,11 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
                     </button>
                 )}
                 <input value={draft} onChange={e => setDraft(e.target.value)} placeholder={listening ? 'Listening…' : `Write in ${learnLanguage}…`}
-                    className="flex-1 min-w-0 bg-black/30 border border-white/[0.08] rounded-full px-4 py-2.5 text-sm text-[#F5F5F7] placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#00FF41]/40" />
+                    className="flex-1 min-w-0 bg-black/30 border border-white/[0.08] rounded-full px-4 py-2.5 text-sm text-[#F5F5F7] placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#3DF5A0]/40" />
                 {running ? (
                     <button type="button" onClick={() => abort.current?.abort()} className="px-4 py-2.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm font-semibold" style={MONO}>Stop</button>
                 ) : (
-                    <button type="submit" disabled={!draft.trim()} className="px-4 py-2.5 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] text-sm font-bold disabled:opacity-40" style={MONO}>Send</button>
+                    <button type="submit" disabled={!draft.trim()} className="px-4 py-2.5 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] text-sm font-bold disabled:opacity-40" style={MONO}>Send</button>
                 )}
                 {messages.length > 0 && !running && (
                     <button type="button" onClick={() => setMessages([])} className="text-[11px] text-slate-500 hover:text-slate-300" style={MONO}>New</button>

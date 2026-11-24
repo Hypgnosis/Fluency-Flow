@@ -2,12 +2,12 @@ import React from 'react';
 import type { VocabCard } from '../../types/lens';
 import { speak } from '../../services/speech';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 export const SpeakerButton: React.FC<{ text: string; locale: string; label: string; small?: boolean }> = ({ text, locale, label, small }) => (
     <button
         onClick={e => { e.stopPropagation(); speak(text, locale); }}
-        className={`flex-shrink-0 rounded-full bg-white/[0.06] hover:bg-[#00FF41]/15 border border-white/[0.08] hover:border-[#00FF41]/30 text-slate-300 hover:text-[#00FF41] transition-colors ${small ? 'p-1.5' : 'p-2'}`}
+        className={`flex-shrink-0 rounded-full bg-white/[0.06] hover:bg-[#3DF5A0]/15 border border-white/[0.08] hover:border-[#3DF5A0]/30 text-slate-300 hover:text-[#3DF5A0] transition-colors ${small ? 'p-1.5' : 'p-2'}`}
         aria-label={label}
         title={label}
     >
@@ -26,7 +26,7 @@ function highlight(sentence: string, word: string): React.ReactNode {
             return (
                 <>
                     {sentence.slice(0, idx)}
-                    <span className="text-[#00FF41] font-semibold">{sentence.slice(idx, idx + w.length)}</span>
+                    <span className="text-[#3DF5A0] font-semibold">{sentence.slice(idx, idx + w.length)}</span>
                     {sentence.slice(idx + w.length)}
                 </>
             );

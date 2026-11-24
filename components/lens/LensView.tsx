@@ -9,7 +9,7 @@ import { localeFor } from '../../services/languages';
 import { fileToSquareDataUrl } from '../../utils/imageUtils';
 import { findSaved } from '../../services/vocabStore';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 interface LensViewProps extends LensLessonOptions {
     savedWords: SavedWord[];
@@ -28,7 +28,7 @@ const TeacherText: React.FC<{ text: string; learnLocale: string }> = ({ text, le
                     <button
                         key={i}
                         onClick={() => speak(m[1], learnLocale)}
-                        className="inline font-semibold text-[#00FF41] underline decoration-[#00FF41]/30 decoration-dotted underline-offset-4 hover:decoration-[#00FF41]"
+                        className="inline font-semibold text-[#3DF5A0] underline decoration-[#3DF5A0]/30 decoration-dotted underline-offset-4 hover:decoration-[#3DF5A0]"
                         title="Tap to hear it"
                     >
                         {m[1]}
@@ -183,7 +183,7 @@ export const LensView: React.FC<LensViewProps> = ({ savedWords, onToggleSave, ..
                 <div className="space-y-3 max-w-2xl mx-auto">
                     {!inLesson && lesson.turns.length === 0 && !lesson.streamingReply && (
                         <div className="text-left">
-                            <div className="inline-block px-4 py-3 rounded-2xl rounded-bl-md bg-[#0d0d0e]/90 border border-[#00FF41]/[0.08] text-sm text-[#F5F5F7]">
+                            <div className="inline-block px-4 py-3 rounded-2xl rounded-bl-md bg-[#0d0d0e]/90 border border-[#3DF5A0]/[0.08] text-sm text-[#F5F5F7]">
                                 {lesson.greeting}
                             </div>
                             <p className="text-[11px] text-slate-600 mt-2" style={MONO}>
@@ -195,7 +195,7 @@ export const LensView: React.FC<LensViewProps> = ({ savedWords, onToggleSave, ..
                         <div key={turn.id} className={turn.role === 'student' ? 'text-right' : 'text-left'}>
                             <div className={`inline-block max-w-[90%] px-4 py-3 rounded-2xl text-sm leading-relaxed border text-left ${turn.role === 'student'
                                 ? 'rounded-br-md bg-[#161616]/90 border-white/[0.08] text-[#F5F5F7]'
-                                : 'rounded-bl-md bg-[#0d0d0e]/90 border-[#00FF41]/[0.08] text-[#F5F5F7]'}`}>
+                                : 'rounded-bl-md bg-[#0d0d0e]/90 border-[#3DF5A0]/[0.08] text-[#F5F5F7]'}`}>
                                 {turn.role === 'teacher'
                                     ? <TeacherText text={turn.text} learnLocale={learnLocale} />
                                     : turn.text}
@@ -204,7 +204,7 @@ export const LensView: React.FC<LensViewProps> = ({ savedWords, onToggleSave, ..
                     ))}
                     {lesson.streamingReply && (
                         <div className="text-left">
-                            <div className="inline-block max-w-[90%] px-4 py-3 rounded-2xl rounded-bl-md bg-[#0d0d0e]/90 border border-[#00FF41]/[0.08] text-sm leading-relaxed text-[#F5F5F7]">
+                            <div className="inline-block max-w-[90%] px-4 py-3 rounded-2xl rounded-bl-md bg-[#0d0d0e]/90 border border-[#3DF5A0]/[0.08] text-sm leading-relaxed text-[#F5F5F7]">
                                 <TeacherText text={lesson.streamingReply} learnLocale={learnLocale} />
                                 <span className="inline-block w-0.5 h-4 ml-1 align-middle bg-current animate-blink opacity-60" />
                             </div>
@@ -232,7 +232,7 @@ export const LensView: React.FC<LensViewProps> = ({ savedWords, onToggleSave, ..
                                         <button
                                             key={c.word + i}
                                             onClick={() => lesson.setSelectedCard(i)}
-                                            className={`w-2 h-2 rounded-full ${i === lesson.selectedCard ? 'bg-[#00FF41]' : 'bg-white/20 hover:bg-white/40'}`}
+                                            className={`w-2 h-2 rounded-full ${i === lesson.selectedCard ? 'bg-[#3DF5A0]' : 'bg-white/20 hover:bg-white/40'}`}
                                             aria-label={`Show card ${i + 1}: ${c.word}`}
                                         />
                                     ))}
@@ -268,7 +268,7 @@ export const LensView: React.FC<LensViewProps> = ({ savedWords, onToggleSave, ..
                         <button onClick={cancelListening} className="px-4 py-2.5 rounded-full bg-white/[0.04] border border-white/[0.08] text-slate-300 text-sm font-semibold hover:bg-white/[0.08]" style={MONO}>
                             Cancel
                         </button>
-                        <button onClick={sendSpeech} className="px-6 py-2.5 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] text-sm font-bold hover:bg-[#00FF41]/25" style={MONO}>
+                        <button onClick={sendSpeech} className="px-6 py-2.5 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] text-sm font-bold hover:bg-[#3DF5A0]/25" style={MONO}>
                             Send
                         </button>
                     </div>
@@ -298,9 +298,9 @@ export const LensView: React.FC<LensViewProps> = ({ savedWords, onToggleSave, ..
                                     value={draft}
                                     onChange={e => setDraft(e.target.value)}
                                     placeholder={inLesson ? 'Ask a follow-up…' : 'Ask about what you see (or leave empty)…'}
-                                    className="flex-1 min-w-0 bg-black/30 border border-white/[0.08] rounded-full px-4 py-2.5 text-sm text-[#F5F5F7] placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#00FF41]/40"
+                                    className="flex-1 min-w-0 bg-black/30 border border-white/[0.08] rounded-full px-4 py-2.5 text-sm text-[#F5F5F7] placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#3DF5A0]/40"
                                 />
-                                <button type="submit" className="px-4 py-2.5 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] text-sm font-bold" style={MONO}>
+                                <button type="submit" className="px-4 py-2.5 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] text-sm font-bold" style={MONO}>
                                     Ask
                                 </button>
                             </form>

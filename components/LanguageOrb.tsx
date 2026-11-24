@@ -55,7 +55,7 @@ function LanguageSphere({ nativeLanguage, learningLanguage }: { nativeLanguage: 
         {/* Latitude ring */}
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[1.6, 0.008, 16, 100]} />
-          <meshBasicMaterial color="#00FF41" transparent opacity={0.4} />
+          <meshBasicMaterial color="#3DF5A0" transparent opacity={0.4} />
         </mesh>
 
         {/* Longitude ring */}
@@ -74,12 +74,12 @@ function LanguageSphere({ nativeLanguage, learningLanguage }: { nativeLanguage: 
         <group rotation={[0, 0, 0.15]}>
           <mesh position={[0, 0, 1.9]}>
             <sphereGeometry args={[0.06, 8, 8]} />
-            <meshBasicMaterial color="#00FF41" />
+            <meshBasicMaterial color="#3DF5A0" />
           </mesh>
           <Text
             position={[0, 0.25, 1.9]}
             fontSize={0.18}
-            color="#00FF41"
+            color="#3DF5A0"
             anchorX="center"
             anchorY="middle"
             font="https://fonts.gstatic.com/s/inter/v18/UcCO3FwrK3iLTeHuS_nVMrMxCp50ujIw2Y3iSe7cLxZhw8Skv0MCFw.woff2"
@@ -114,7 +114,7 @@ function LanguageSphere({ nativeLanguage, learningLanguage }: { nativeLanguage: 
             <mesh key={i} position={[Math.cos(angle) * r, Math.sin(angle * 0.3) * 0.4, Math.sin(angle) * r]}>
               <sphereGeometry args={[0.025, 8, 8]} />
               <meshBasicMaterial
-                color={i % 2 === 0 ? '#00FF41' : '#FFBF00'}
+                color={i % 2 === 0 ? '#3DF5A0' : '#FFBF00'}
                 transparent
                 opacity={0.5}
               />
@@ -142,7 +142,7 @@ export default function LanguageOrb({ nativeLanguage, learningLanguage }: Langua
       >
         <ambientLight intensity={0.5} />
         <directionalLight position={[5, 5, 5]} intensity={0.4} color="#FFBF00" />
-        <directionalLight position={[-4, -2, -3]} intensity={0.2} color="#00FF41" />
+        <directionalLight position={[-4, -2, -3]} intensity={0.2} color="#3DF5A0" />
         <pointLight position={[0, 3, 2]} intensity={0.3} color="#fff" />
         
         <LanguageSphere nativeLanguage={nativeLanguage} learningLanguage={learningLanguage} />

@@ -5,7 +5,7 @@ import { localeFor } from '../../services/languages';
 import { VocabCardView, SpeakerButton } from '../lens/VocabCardView';
 import { useOnline } from '../offline/useOnDevice';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 
 interface AudioScribeProps {
     nativeLanguage: string;
@@ -127,8 +127,7 @@ export const AudioScribe: React.FC<AudioScribeProps> = ({ nativeLanguage, learnL
     return (
         <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-4">
             <div>
-                <h2 className="text-white text-lg font-bold">Audio Scribe</h2>
-                <p className="text-slate-500 text-sm mt-1">
+                <p className="text-slate-400 text-[15px] leading-relaxed">
                     Record or upload up to {MAX_CLIP_SECONDS} seconds of audio (a song, a voice note, a podcast) and get the
                     transcript, a translation, and words to learn.
                 </p>
@@ -171,7 +170,7 @@ export const AudioScribe: React.FC<AudioScribeProps> = ({ nativeLanguage, learnL
                                 </span>
                             ) : (
                                 <button onClick={transcribe} disabled={!online}
-                                    className="px-4 py-1.5 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] font-bold disabled:opacity-40">
+                                    className="px-4 py-1.5 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] font-bold disabled:opacity-40">
                                     Transcribe
                                 </button>
                             )}
@@ -213,7 +212,7 @@ export const AudioScribe: React.FC<AudioScribeProps> = ({ nativeLanguage, learnL
                                     <li key={i} className="text-sm">
                                         <span className="line-through text-slate-500">{c.incorrect}</span>
                                         <span className="mx-2 text-slate-500">→</span>
-                                        <span className="font-semibold text-[#00FF41]">{c.correct}</span>
+                                        <span className="font-semibold text-[#3DF5A0]">{c.correct}</span>
                                         {c.explanation && <p className="text-xs text-slate-400 mt-0.5">{c.explanation}</p>}
                                     </li>
                                 ))}

@@ -6,7 +6,7 @@ import { Dictation, isDictationSupported } from '../../services/speech';
 import { matchesSpokenWord } from '../../services/speechMatch';
 import { describeNextReview, Grade, isDue, review } from '../../services/srs';
 
-const MONO = { fontFamily: "'IBM Plex Mono', monospace" };
+const MONO = { fontVariantNumeric: 'tabular-nums' } as const;
 const COUNTS = [5, 10, 20, 0]; // 0 = all
 
 interface StudyDeckProps {
@@ -27,7 +27,7 @@ function shuffle<T>(items: T[]): T[] {
 const GRADES: { grade: Grade; label: string; className: string }[] = [
     { grade: 'again', label: 'Again', className: 'border-rose-500/40 text-rose-300 hover:bg-rose-500/10' },
     { grade: 'hard', label: 'Hard', className: 'border-amber-500/40 text-amber-300 hover:bg-amber-500/10' },
-    { grade: 'good', label: 'Good', className: 'border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10' },
+    { grade: 'good', label: 'Good', className: 'border-[#3DF5A0]/40 text-[#3DF5A0] hover:bg-[#3DF5A0]/10' },
     { grade: 'easy', label: 'Easy', className: 'border-sky-400/40 text-sky-300 hover:bg-sky-400/10' },
 ];
 
@@ -123,8 +123,8 @@ export const StudyDeck: React.FC<StudyDeckProps> = ({ words, defaultLanguage, on
                 <div>
                     <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold" style={MONO}>Cards</span>
                     <div className="mt-1 flex gap-2">
-                        <button onClick={() => setOnlyDue(true)} className={`flex-1 px-3 py-2 rounded-xl border text-sm ${onlyDue ? 'border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10' : 'border-white/[0.08] text-slate-400'}`}>Due ({due.length})</button>
-                        <button onClick={() => setOnlyDue(false)} className={`flex-1 px-3 py-2 rounded-xl border text-sm ${!onlyDue ? 'border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10' : 'border-white/[0.08] text-slate-400'}`}>All ({pool.length})</button>
+                        <button onClick={() => setOnlyDue(true)} className={`flex-1 px-3 py-2 rounded-xl border text-sm ${onlyDue ? 'border-[#3DF5A0]/40 text-[#3DF5A0] bg-[#3DF5A0]/10' : 'border-white/[0.08] text-slate-400'}`}>Due ({due.length})</button>
+                        <button onClick={() => setOnlyDue(false)} className={`flex-1 px-3 py-2 rounded-xl border text-sm ${!onlyDue ? 'border-[#3DF5A0]/40 text-[#3DF5A0] bg-[#3DF5A0]/10' : 'border-white/[0.08] text-slate-400'}`}>All ({pool.length})</button>
                     </div>
                 </div>
                 <div>
@@ -140,7 +140,7 @@ export const StudyDeck: React.FC<StudyDeckProps> = ({ words, defaultLanguage, on
                 {onlyDue && due.length === 0 && (
                     <p className="text-xs text-slate-500" style={MONO}>Nothing is due right now, so this session uses all your {language} words.</p>
                 )}
-                <button onClick={start} disabled={pool.length === 0} className="w-full py-3 rounded-xl bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] font-bold disabled:opacity-40" style={MONO}>
+                <button onClick={start} disabled={pool.length === 0} className="w-full py-3 rounded-xl bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] font-bold disabled:opacity-40" style={MONO}>
                     Start
                 </button>
             </div>
@@ -156,7 +156,7 @@ export const StudyDeck: React.FC<StudyDeckProps> = ({ words, defaultLanguage, on
                     {stats.reviewed} reviews{isDictationSupported() ? ` · ${stats.spokenOk} said correctly` : ''}
                 </p>
                 <div className="flex gap-3 mt-2">
-                    <button onClick={start} className="px-5 py-2.5 rounded-full bg-[#00FF41]/15 border border-[#00FF41]/40 text-[#00FF41] text-sm font-bold" style={MONO}>Again</button>
+                    <button onClick={start} className="px-5 py-2.5 rounded-full bg-[#3DF5A0]/15 border border-[#3DF5A0]/40 text-[#3DF5A0] text-sm font-bold" style={MONO}>Again</button>
                     <button onClick={() => setQueue(null)} className="px-5 py-2.5 rounded-full bg-white/[0.04] border border-white/[0.08] text-slate-300 text-sm" style={MONO}>Change deck</button>
                 </div>
             </div>
@@ -184,7 +184,7 @@ export const StudyDeck: React.FC<StudyDeckProps> = ({ words, defaultLanguage, on
                 ) : (
                     <>
                         <div className="flex items-center gap-2">
-                            <p className="text-[#00FF41] text-3xl font-bold">{card.word}</p>
+                            <p className="text-[#3DF5A0] text-3xl font-bold">{card.word}</p>
                             <SpeakerButton text={card.word} locale={learnLocale} label={`Pronounce ${card.word}`} />
                         </div>
                         {card.example && (
@@ -201,7 +201,7 @@ export const StudyDeck: React.FC<StudyDeckProps> = ({ words, defaultLanguage, on
             </div>
 
             {heard && (
-                <p className={`text-center text-sm ${heard.ok ? 'text-[#00FF41]' : 'text-rose-300'}`} style={MONO}>
+                <p className={`text-center text-sm ${heard.ok ? 'text-[#3DF5A0]' : 'text-rose-300'}`} style={MONO}>
                     {heard.ok ? '✓ ' : '✗ '}“{heard.text}”
                 </p>
             )}
