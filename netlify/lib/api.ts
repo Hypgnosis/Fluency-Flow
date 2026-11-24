@@ -48,6 +48,9 @@ async function later(ctx: RequestContext | undefined, work: () => Promise<unknow
     else await p;
 }
 
+/** If the plan cannot be checked, AI stays off (no spending without bookkeeping). */
+const BILLING_UNAVAILABLE = 'Glossos could not check your plan just now. Please try again in a moment.';
+
 /** 402 with the reason, so the app can open the plans screen. */
 export function paywallResponse(refusal: Refusal): Response {
     return jsonResponse(402, { error: { code: 402, message: refusal.message, reason: refusal.reason, plan: refusal.plan } });
@@ -169,7 +172,13 @@ export function createGenaiHandler(config: ApiConfig) {
         const model = body.model;
 
         if (billing) {
-            const allowed = await billing.checkText(caller);
+            let allowed: Awaited<ReturnType<Ledger['checkText']>>;
+            try {
+                allowed = await billing.checkText(caller);
+            } catch (err) {
+                log.error(`[api] billing check failed: ${(err as Error).message}`);
+                return errorResponse(503, BILLING_UNAVAILABLE);
+            }
             if (!allowed.ok) return paywallResponse(allowed as Refusal);
         }
         const charge = (usage: unknown) => billing
@@ -274,7 +283,13 @@ export function createLiveTokenHandler(config: ApiConfig) {
         let lifetimeMs = LIVE_TOKEN_LIFETIME_MS;
         let lease: { leaseId: string; seconds: number } | null = null;
         if (billing) {
-            const grant = await billing.reserveLive(caller, purpose);
+            let grant: Awaited<ReturnType<Ledger['reserveLive']>>;
+            try {
+                grant = await billing.reserveLive(caller, purpose);
+            } catch (err) {
+                log.error(`[api] billing reserve failed: ${(err as Error).message}`);
+                return errorResponse(503, BILLING_UNAVAILABLE);
+            }
             if (!grant.ok) return paywallResponse(grant as Refusal);
             const g = grant as { leaseId: string; seconds: number };
             lease = { leaseId: g.leaseId, seconds: g.seconds };

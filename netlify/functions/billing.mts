@@ -14,6 +14,6 @@ const handler = createBillingHandler({
 export default (req: Request) => handler(req);
 
 export const config = {
-    path: ['/api/billing/status', '/api/billing/checkout', '/api/billing/portal', '/api/billing/end', '/api/billing/webhook', '/api/billing/report'],
-    method: 'POST',
+    path: ['/api/billing/status', '/api/billing/checkout', '/api/billing/portal', '/api/billing/end', '/api/billing/webhook', '/api/billing/report', '/api/billing/health'],
+    method: ['POST', 'GET'],
 };

@@ -37,6 +37,18 @@ export function createBillingHandler(config: BillingHandlerConfig) {
     return async (req: Request): Promise<Response> => {
         const url = new URL(req.url);
         const route = url.pathname.replace(/\/+$/, '').split('/').pop();
+
+        // Is the billing store reachable from the functions? (no user data involved)
+        if (route === 'health') {
+            const t0 = now();
+            try {
+                const ok = await ledger.ping();
+                return json(ok ? 200 : 503, { ok, ms: now() - t0, paymentsReady });
+            } catch (err) {
+                log.error(`[billing] health: ${(err as Error).message}`);
+                return json(503, { ok: false, ms: now() - t0, paymentsReady });
+            }
+        }
         if (req.method !== 'POST') return errorResponse(405, 'Use POST');
 
         if (route === 'webhook') {

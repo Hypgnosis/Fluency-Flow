@@ -341,3 +341,23 @@ describe('/api/billing', () => {
         expect((await handle(post('/api/billing/report', {}, 'boss'))).status).toBe(200);
     });
 });
+
+describe('billing health and outages', () => {
+    it('round-trips the store', async () => {
+        const { ledger } = setup();
+        const handle = createBillingHandler({ apiKey: '', projectId: 'p', verifyToken: goodToken, log: silent, ledger });
+        const res = await handle(new Request('https://glossos.example/api/billing/health'));
+        expect(await res.json()).toMatchObject({ ok: true, paymentsReady: false });
+    });
+
+    it('keeps AI off with a clear message if the plan cannot be checked', async () => {
+        const broken = createLedger({ store: { get: async () => { throw new Error('blobs down'); }, put: async () => false }, log: silent });
+        const upstream = vi.fn();
+        const generate = createGenaiHandler({ apiKey: 'k', projectId: 'p', fetchImpl: upstream, verifyToken: goodToken, log: silent, billing: broken });
+        const live = createLiveTokenHandler({ apiKey: 'k', projectId: 'p', fetchImpl: upstream, verifyToken: goodToken, log: silent, billing: broken });
+        const body = { model: 'gemini-3.8-flash', contents: [{ role: 'user', parts: [{ text: 'hi' }] }] };
+        expect((await generate(post('/api/generate', body))).status).toBe(503);
+        expect((await live(post('/api/live-token', {}))).status).toBe(503);
+        expect(upstream).not.toHaveBeenCalled();
+    });
+});

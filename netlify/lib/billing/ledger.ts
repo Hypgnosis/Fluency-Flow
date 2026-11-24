@@ -250,9 +250,20 @@ export function createLedger(opts: LedgerOptions) {
         };
     }
 
+    let lastPing = 0;
+
     return {
         planOf,
         isOwner,
+
+        /** Round trip through the store (a write at most once a minute per instance). */
+        async ping(): Promise<boolean> {
+            const t = now();
+            if (t - lastPing < 60_000) return (await store.get<number>('health/ping')).value !== null;
+            const next = await update<number>(store, 'health/ping', () => t);
+            lastPing = t;
+            return next === t && (await store.get<number>('health/ping')).value === t;
+        },
 
         /** Account summary for the app. */
         async status(caller: Caller) {
