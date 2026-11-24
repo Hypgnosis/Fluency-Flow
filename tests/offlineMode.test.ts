@@ -182,3 +182,22 @@ describe('offlineAssets build plugin', () => {
         expect(typeof manifest.version).toBe('number');
     });
 });
+
+import { describeAuthError } from '../utils/authErrors';
+
+describe('describeAuthError', () => {
+    it('explains configuration problems instead of "please try again"', () => {
+        expect(describeAuthError({ code: 'auth/unauthorized-domain' }, 'google')).toContain('Authorized domains');
+        expect(describeAuthError({ code: 'auth/admin-restricted-operation' }, 'guest')).toContain('Anonymous');
+        expect(describeAuthError({ code: 'auth/operation-not-allowed' }, 'email-sign-in')).toContain('Sign-in method');
+        expect(describeAuthError({ code: 'auth/popup-blocked' }, 'google')).toContain('pop-ups');
+        expect(describeAuthError({ code: 'auth/invalid-credential' }, 'email-sign-in')).toContain('Invalid email or password');
+        expect(describeAuthError({ code: 'auth/email-already-in-use' }, 'email-sign-up')).toContain('already exists');
+    });
+
+    it('reads codes from messages and falls back with the code shown', () => {
+        expect(describeAuthError(new Error('Firebase: Error (auth/weak-password).'), 'email-sign-up')).toContain('6 characters');
+        expect(describeAuthError({ code: 'auth/something-new' }, 'guest')).toBe('Guest sign-in failed. (auth/something-new)');
+        expect(describeAuthError(new Error('boom'), 'google')).toBe('Google sign-in failed. Please try again.');
+    });
+});

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { describeAuthError } from '../utils/authErrors';
 import {
     signInAnonymously,
     signInWithPopup,
@@ -116,7 +117,7 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
             await signInWithGoogle();
             onClose?.();
         } catch (err) {
-            setError('Failed to sign in with Google. Please try again.');
+            setError(describeAuthError(err, 'google'));
         } finally {
             setLoading(false);
         }
@@ -129,7 +130,7 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
             await signInAsGuest();
             onClose?.();
         } catch (err) {
-            setError('Failed to continue as guest. Please try again.');
+            setError(describeAuthError(err, 'guest'));
         } finally {
             setLoading(false);
         }
@@ -158,8 +159,7 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
             onClose?.();
         } catch (err: any) {
             console.error('Email auth error:', err);
-            const msg = err.message || 'Authentication failed. Please check your credentials.';
-            setError(msg.includes('auth/invalid-credential') ? 'Invalid email or password.' : msg);
+            setError(describeAuthError(err, isRegistering ? 'email-sign-up' : 'email-sign-in'));
         } finally {
             setLoading(false);
         }
