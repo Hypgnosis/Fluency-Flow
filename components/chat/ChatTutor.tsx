@@ -3,6 +3,9 @@ import { chatTutorSystemPrompt } from '../../services/tutorPrompts';
 import { engineReady, streamReply, type ReplyStats } from '../../services/textEngine';
 import type { ChatTurn } from '../../services/onDevice/runtime';
 import { renderMarkdown } from '../../utils/miniMarkdown';
+import { Dictation, isDictationSupported, isTtsSupported, speakSegments, stopSpeaking } from '../../services/speech';
+import { replySegments } from '../../services/readAloud';
+import { localeFor } from '../../services/languages';
 import { EngineSwitch } from '../offline/EngineSwitch';
 import { useEnginePreference } from '../offline/useOnDevice';
 import { StatsLine } from './StatsLine';
@@ -25,7 +28,9 @@ interface ChatTutorProps {
 
 const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-const Bubble: React.FC<{ message: ChatMessage; streaming?: boolean }> = ({ message, streaming }) => {
+const AUTO_READ_KEY = 'glossos_chat_autoread';
+
+const Bubble: React.FC<{ message: ChatMessage; streaming?: boolean; speaking?: boolean; onSpeak?: () => void }> = ({ message, streaming, speaking, onSpeak }) => {
     const html = useMemo(() => (message.role === 'model' ? renderMarkdown(message.text) : ''), [message.role, message.text]);
     return (
         <div className={message.role === 'user' ? 'text-right' : 'text-left'}>
@@ -36,7 +41,17 @@ const Bubble: React.FC<{ message: ChatMessage; streaming?: boolean }> = ({ messa
                     ? message.text
                     : <div className="glossos-md" dangerouslySetInnerHTML={{ __html: html || (streaming ? '<p>…</p>' : '') }} />}
             </div>
-            {message.stats && <div className="mt-1"><StatsLine stats={message.stats} /></div>}
+            {message.role === 'model' && !streaming && message.text && (
+                <div className="mt-1 flex items-center gap-2">
+                    {onSpeak && (
+                        <button onClick={onSpeak} className={`text-[11px] ${speaking ? 'text-[#00FF41]' : 'text-slate-500 hover:text-slate-300'}`} style={MONO}
+                            aria-label={speaking ? 'Stop reading' : 'Read aloud'}>
+                            {speaking ? '■ Stop' : '🔊 Read aloud'}
+                        </button>
+                    )}
+                    {message.stats && <StatsLine stats={message.stats} />}
+                </div>
+            )}
         </div>
     );
 };
@@ -53,8 +68,57 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
     const [error, setError] = useState<string | null>(null);
     const abort = useRef<AbortController | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const dictation = useRef<Dictation | null>(null);
+    const [listening, setListening] = useState(false);
+    const [speakingId, setSpeakingId] = useState<string | null>(null);
+    const [autoRead, setAutoRead] = useState(() => {
+        try { return localStorage.getItem(AUTO_READ_KEY) === 'true'; } catch { return false; }
+    });
 
     const system = chatTutorSystemPrompt({ nativeLanguage, learnLanguage, level });
+    const learnLocale = localeFor(learnLanguage);
+    const nativeLocale = localeFor(nativeLanguage);
+
+    /** Reads a reply aloud: target-language text and [native explanations] get matching voices. */
+    const readAloud = (message: ChatMessage) => {
+        if (speakingId === message.id) {
+            stopSpeaking();
+            setSpeakingId(null);
+            return;
+        }
+        stopSpeaking();
+        setSpeakingId(message.id);
+        speakSegments(replySegments(message.text, learnLocale, nativeLocale))
+            .finally(() => setSpeakingId(id => (id === message.id ? null : id)));
+    };
+
+    const toggleAutoRead = () => {
+        const next = !autoRead;
+        setAutoRead(next);
+        try { localStorage.setItem(AUTO_READ_KEY, String(next)); } catch { /* storage unavailable */ }
+        if (!next) stopSpeaking();
+    };
+
+    /** Tap-to-talk dictation in the language being learned (text goes into the box). */
+    const toggleDictation = async () => {
+        if (listening) {
+            const d = dictation.current;
+            dictation.current = null;
+            setListening(false);
+            const text = d ? await d.finish() : '';
+            if (text) setDraft(text);
+            return;
+        }
+        stopSpeaking();
+        setSpeakingId(null);
+        const d = new Dictation(learnLocale, text => setDraft(text), message => {
+            setListening(false);
+            setError(message);
+        });
+        dictation.current = d;
+        d.start();
+        setListening(true);
+    };
 
     // A new language pair or level starts a new conversation.
     useEffect(() => {
@@ -62,7 +126,11 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
         setMessages([]);
         setError(null);
     }, [nativeLanguage, learnLanguage, level]);
-    useEffect(() => () => abort.current?.abort(), []);
+    useEffect(() => () => {
+        abort.current?.abort();
+        dictation.current?.cancel();
+        stopSpeaking();
+    }, []);
     useEffect(() => {
         scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
     }, [messages]);
@@ -70,6 +138,13 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
     const send = async (text = draft) => {
         const message = text.trim();
         if (!message || running) return;
+        if (listening) {
+            dictation.current?.cancel();
+            dictation.current = null;
+            setListening(false);
+        }
+        stopSpeaking();
+        setSpeakingId(null);
         if (!engineReady(engine)) {
             setError('Load an on-device model first, or switch to Cloud.');
             return;
@@ -96,6 +171,11 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
                 out += chunk;
                 setMessages(prev => prev.map(m => (m.id === reply.id ? { ...m, text: out } : m)));
             }
+            if (autoRead && out.trim() && !controller.signal.aborted) {
+                setSpeakingId(reply.id);
+                speakSegments(replySegments(out, learnLocale, nativeLocale))
+                    .finally(() => setSpeakingId(id => (id === reply.id ? null : id)));
+            }
         } catch (err) {
             if ((err as Error).name !== 'AbortError') {
                 setError((err as Error).message || 'Something went wrong.');
@@ -117,7 +197,15 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
         <div className="flex flex-col h-full min-h-0">
             <div className="px-4 sm:px-6 py-2 border-b border-white/[0.04] flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold" style={MONO}>Chat tutor</span>
-                <EngineSwitch value={engine} onChange={setEngine} onManageModels={onManageModels} />
+                <div className="flex items-center gap-3">
+                    {isTtsSupported() && (
+                        <button onClick={toggleAutoRead} className={`text-[11px] ${autoRead ? 'text-[#00FF41]' : 'text-slate-500 hover:text-slate-300'}`} style={MONO}
+                            title="Read every reply aloud" aria-pressed={autoRead}>
+                            {autoRead ? '🔊 Auto-read on' : '🔈 Auto-read off'}
+                        </button>
+                    )}
+                    <EngineSwitch value={engine} onChange={setEngine} onManageModels={onManageModels} />
+                </div>
             </div>
 
             <div ref={scrollRef} className="flex-grow min-h-0 overflow-y-auto px-4 sm:px-6 py-4 space-y-3 max-w-2xl w-full mx-auto">
@@ -136,7 +224,8 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
                     </div>
                 )}
                 {messages.map((m, i) => (
-                    <Bubble key={m.id} message={m} streaming={running && i === messages.length - 1} />
+                    <Bubble key={m.id} message={m} streaming={running && i === messages.length - 1}
+                        speaking={speakingId === m.id} onSpeak={isTtsSupported() ? () => readAloud(m) : undefined} />
                 ))}
             </div>
 
@@ -149,7 +238,16 @@ export const ChatTutor: React.FC<ChatTutorProps> = ({ nativeLanguage, learnLangu
 
             <form className="px-4 sm:px-6 py-3 border-t border-white/[0.04] flex items-center gap-2 max-w-2xl w-full mx-auto"
                 onSubmit={e => { e.preventDefault(); send(); }}>
-                <input value={draft} onChange={e => setDraft(e.target.value)} placeholder={`Write in ${learnLanguage}…`}
+                {isDictationSupported() && (
+                    <button type="button" onClick={toggleDictation} disabled={running}
+                        className={`p-2.5 rounded-full border transition-colors disabled:opacity-40 ${listening
+                            ? 'bg-rose-500/15 border-rose-500/40 text-rose-300 animate-pulse'
+                            : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-white'}`}
+                        aria-label={listening ? 'Stop dictation' : `Speak in ${learnLanguage}`} title={listening ? 'Stop dictation' : `Speak in ${learnLanguage}`}>
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 016 0v8.25a3 3 0 01-3 3z" /></svg>
+                    </button>
+                )}
+                <input value={draft} onChange={e => setDraft(e.target.value)} placeholder={listening ? 'Listening…' : `Write in ${learnLanguage}…`}
                     className="flex-1 min-w-0 bg-black/30 border border-white/[0.08] rounded-full px-4 py-2.5 text-sm text-[#F5F5F7] placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-[#00FF41]/40" />
                 {running ? (
                     <button type="button" onClick={() => abort.current?.abort()} className="px-4 py-2.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm font-semibold" style={MONO}>Stop</button>

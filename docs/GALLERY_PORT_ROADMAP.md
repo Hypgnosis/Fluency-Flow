@@ -43,11 +43,18 @@ So only skills whose result the tutor needs *before* answering are declared as L
 - User-loadable skills from a URL (the `SKILL.md` format, a sandboxed iframe, and the `ai_edge_gallery_get_result(data, secret)` contract).
 - Revisit native Live tools when a newer Live model handles several tools reliably.
 
-## Phase 3 — Study tools (queued)
+## Phase 3 — Study tools ✅ (done)
 
-- **Text chat with dictation and read-aloud** (Gallery AI Chat). A typed tutor for when voice isn't practical. It reuses `services/speech.ts`.
-- **Writing Lab** (Gallery Prompt Lab). Single-turn templates: correct my grammar, rewrite in a tone, translate, explain a sentence, conjugate. It shows the prompt preview and has temperature/top-k/top-p controls.
-- **Audio Scribe.** Record or upload a clip of up to 30 s, get a transcript and translation, and turn the key words into cards.
+- **Chat** (Gallery AI Chat): a text tutor that runs on Gemini or on-device.
+  - Dictation in the language being learned.
+  - Read-aloud on every reply. Target-language text and `[native explanations]` get different voices.
+  - Auto-read toggle, per-reply stats.
+- **Writing Lab** (Gallery Prompt Lab): templates to correct, rewrite tone, translate, explain a sentence, conjugate, summarize, or use free form. Prompt preview and temperature / top-K / top-P / max-token sliders. Runs on Gemini or on-device.
+- **Audio Scribe** (Gallery Audio Scribe): record or upload up to 60 s, converted in the browser to 16 kHz WAV. It works in two steps:
+  1. A verbatim transcript from `gemini-3.5-transcribe`.
+  2. Translation, words to save, and the mistakes made in what was said, from the transcript text.
+
+  In testing, asking for everything in one request made models silently "correct" the speaker, so the transcript gets its own step.
 
 ## Phase 4 — Offline mode ✅ (option A, done)
 

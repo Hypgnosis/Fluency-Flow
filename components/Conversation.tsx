@@ -28,15 +28,17 @@ const LensTeacher = lazy(() => import('./lens/LensTeacher'));
 const ChatTutor = lazy(() => import('./chat/ChatTutor').then(m => ({ default: m.ChatTutor })));
 const WritingLab = lazy(() => import('./lab/WritingLab').then(m => ({ default: m.WritingLab })));
 const OfflinePanel = lazy(() => import('./offline/OfflinePanel'));
+const AudioScribe = lazy(() => import('./scribe/AudioScribe'));
 
 /** Top-level modes (Gallery-style task tiles, shown as a mode bar). */
-type AppMode = 'voice' | 'lens' | 'chat' | 'lab' | 'offline';
+type AppMode = 'voice' | 'lens' | 'chat' | 'lab' | 'scribe' | 'offline';
 
 const MODE_ICONS: Record<AppMode, string> = {
     voice: 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z',
     lens: 'M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z',
     chat: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z',
     lab: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',
+    scribe: 'M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3',
     offline: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4',
 };
 
@@ -45,6 +47,7 @@ const MODES: { id: AppMode; label: string; title: string }[] = [
     { id: 'lens', label: 'Lens', title: 'Point your camera and learn words' },
     { id: 'chat', label: 'Chat', title: 'Practice by text (works offline with an on-device model)' },
     { id: 'lab', label: 'Writing', title: 'Writing Lab: correct, rewrite, translate, explain, conjugate' },
+    { id: 'scribe', label: 'Scribe', title: 'Audio Scribe: transcribe and translate a song, voice note or podcast clip' },
     { id: 'offline', label: 'Offline', title: 'Download a model to use Glossos without internet' },
 ];
 
@@ -1249,6 +1252,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                             {mode === 'lab' && (
                                 <div className="flex-grow min-h-0 overflow-y-auto">
                                     <WritingLab nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} onManageModels={() => switchMode('offline')} />
+                                </div>
+                            )}
+                            {mode === 'scribe' && (
+                                <div className="flex-grow min-h-0 overflow-y-auto">
+                                    <AudioScribe nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} />
                                 </div>
                             )}
                             {mode === 'offline' && <OfflinePanel />}

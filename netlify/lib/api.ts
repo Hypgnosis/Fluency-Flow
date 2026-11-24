@@ -13,7 +13,7 @@
 import { verifyFirebaseIdToken, type VerifiedUser } from './firebaseAuth.ts';
 
 const GEMINI_REST = 'https://generativelanguage.googleapis.com/v1beta';
-export const DEFAULT_TEXT_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+export const DEFAULT_TEXT_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-transcribe'];
 const MAX_BODY_BYTES = 6 * 1024 * 1024; // Netlify's buffered request limit
 const RATE_WINDOW_MS = 60 * 1000;
 /** Time a client has to open the Live session after getting a token. */
