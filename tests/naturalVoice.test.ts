@@ -16,6 +16,7 @@ class FakeWebSocket {
     constructor(public url: string) { FakeWebSocket.all.push(this); setTimeout(() => this.onopen?.(), 0); }
     send(data: string) { this.sent.push(JSON.parse(data)); }
     close() { this.readyState = 3; }
+    addEventListener() { /* lease bookkeeping; not needed here */ }
     server(msg: unknown) { this.onmessage?.({ data: JSON.stringify(msg) }); }
 }
 

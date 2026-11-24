@@ -7,7 +7,7 @@
  * transcribes accurately; gemini-3.8-live still produced audio, and neither Live model accepts a
  * TEXT response, so the help itself comes from a fast text model, once per finished sentence.
  */
-import { createBlob, resolveLiveWebSocketUrl } from './geminiService';
+import { createBlob, releaseLiveUrl, resolveLiveWebSocketUrl } from './geminiService';
 import { FAST_MODELS, generateWithFallback, lowLatencyThinking } from './genaiClient';
 
 /**
@@ -99,11 +99,13 @@ export class ConversationListener {
     }
 
     private async connect(): Promise<void> {
-        const url = await resolveLiveWebSocketUrl();
+        const url = await resolveLiveWebSocketUrl(fetch, 'assist');
         await new Promise<void>((resolve, reject) => {
             const ws = new WebSocket(url);
             ws.binaryType = 'arraybuffer';
             let ready = false;
+            // Hands unused listening time back however the socket closes (stop() clears onclose).
+            ws.addEventListener('close', () => releaseLiveUrl(url, ready));
             ws.onopen = () => ws.send(JSON.stringify({
                 setup: {
                     model: `models/${LISTENER_MODEL}`,

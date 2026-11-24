@@ -8,6 +8,7 @@
  */
 
 import { auth } from './firebase';
+import { handlePaymentRequired } from './billing';
 
 const DIRECT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
@@ -165,6 +166,8 @@ async function errorFrom(res: Response): Promise<GenAiError> {
     try {
         const body = await res.json();
         message = body?.error?.message || body?.error || message;
+        // Out of AI minutes: open the plans screen.
+        if (res.status === 402) message = handlePaymentRequired(body);
     } catch { /* not JSON */ }
     return new GenAiError(String(message), res.status);
 }

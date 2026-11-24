@@ -12,7 +12,7 @@
  *
  * If the voice cannot start or stays silent, say() rejects and the caller falls back to the browser.
  */
-import { resolveLiveWebSocketUrl } from './geminiService';
+import { releaseLiveUrl, resolveLiveWebSocketUrl } from './geminiService';
 import { decode } from '../utils/audioUtils';
 
 export const READER_MODEL = 'gemini-3.1-flash-live-preview';
@@ -138,11 +138,13 @@ class NaturalVoice {
         if (this.opening) return this.opening;
         const voiceName = this.voiceName;
         this.opening = (async () => {
-            const url = await resolveLiveWebSocketUrl();
+            const url = await resolveLiveWebSocketUrl(fetch, 'voice');
             return new Promise<WebSocket>((resolve, reject) => {
                 const ws = new WebSocket(url);
                 ws.binaryType = 'arraybuffer';
                 let ready = false;
+                // Hands unused voice time back however the socket closes (closeSocket clears onclose).
+                ws.addEventListener('close', () => releaseLiveUrl(url, ready));
                 ws.onopen = () => ws.send(JSON.stringify({
                     setup: {
                         model: `models/${READER_MODEL}`,

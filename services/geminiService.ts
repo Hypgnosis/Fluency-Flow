@@ -1,5 +1,7 @@
 import { encode, pcmTo16kInt16 } from '../utils/audioUtils';
 import { authHeaders } from './genaiClient';
+import { endLease, handlePaymentRequired } from './billing';
+import type { LivePurpose } from './billing/plans';
 import type { LiveFunctionResponse } from './tutorSkills/types';
 
 /**
@@ -31,6 +33,8 @@ export function liveModelOrder(): string[] {
   return [...new Set([liveConfig.model, DEFAULT_LIVE_MODEL, ...FALLBACK_LIVE_MODELS].filter(Boolean))];
 }
 const LIVE_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage';
+/** Compresses the Talk context after ~4 minutes of conversation, keeping the latest ~2. */
+export const LIVE_CONTEXT_WINDOW = { triggerTokens: 6400, slidingWindow: { targetTokens: 3200 } };
 
 export interface GeminiCallbacks {
   onOpen: () => void;
@@ -71,7 +75,7 @@ export function createBlob(data: Float32Array, inputSampleRate: number): { data:
  * - Production (Netlify): asks /api/live-token for a one-use ephemeral token and connects to the
  *   constrained endpoint with it, so the real API key never reaches the browser.
  */
-export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch): Promise<string> {
+export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch, purpose: LivePurpose = 'talk'): Promise<string> {
   if (liveConfig.proxyUrl) {
     return `${liveConfig.proxyUrl.replace(/\/$/, '')}/ws`;
   }
@@ -79,12 +83,30 @@ export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch): 
     console.warn('[GLOSSOS] [DEV] Using direct Gemini connection with the local dev key');
     return `${LIVE_WS_BASE}.${API_VERSION}.GenerativeService.BidiGenerateContent?key=${liveConfig.devApiKey}`;
   }
-  const res = await fetchImpl('/api/live-token', { method: 'POST', headers: await authHeaders() });
+  const res = await fetchImpl('/api/live-token', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ purpose }) });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 402) throw new Error(handlePaymentRequired(body));
   if (!res.ok || !body.token) {
     throw new Error(body?.error?.message || `Could not start a voice session (${res.status})`);
   }
-  return `${LIVE_WS_BASE}.${API_VERSION}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(body.token)}`;
+  const url = `${LIVE_WS_BASE}.${API_VERSION}.GenerativeService.BidiGenerateContentConstrained?access_token=${encodeURIComponent(body.token)}`;
+  if (typeof body.leaseId === 'string') leaseByUrl.set(url, body.leaseId);
+  return url;
+}
+
+/** Voice time the server reserved for each token URL, handed back when the session ends. */
+const leaseByUrl = new Map<string, string>();
+
+/**
+ * Tells the server a Live connection is over, so unused reserved time is returned.
+ * Pass used=false for a token that never opened a session.
+ */
+export function releaseLiveUrl(url: string | undefined, used = true): void {
+  if (!url) return;
+  const leaseId = leaseByUrl.get(url);
+  if (!leaseId) return;
+  leaseByUrl.delete(url);
+  endLease(leaseId, used);
 }
 
 /**
@@ -151,6 +173,7 @@ let prefetched: { url: Promise<string>; at: number } | null = null;
 /** Starts getting a Live connection URL (token) in the background. Safe to call repeatedly. */
 export function prefetchLiveConnection(): void {
   if (prefetched && Date.now() - prefetched.at < PREFETCH_MAX_AGE_MS) return;
+  if (prefetched) prefetched.url.then(url => releaseLiveUrl(url, false), () => undefined);
   const url = resolveLiveWebSocketUrl();
   const entry = { url, at: Date.now() };
   url.catch(() => { if (prefetched === entry) prefetched = null; });
@@ -162,6 +185,7 @@ function takeLiveWebSocketUrl(): Promise<string> {
   const entry = prefetched;
   prefetched = null;
   if (entry && Date.now() - entry.at < PREFETCH_MAX_AGE_MS) return entry.url.catch(() => resolveLiveWebSocketUrl());
+  if (entry) entry.url.then(url => releaseLiveUrl(url, false), () => undefined);
   return resolveLiveWebSocketUrl();
 }
 
@@ -199,6 +223,9 @@ export async function startLiveSession(
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
+      // Live re-bills the whole conversation on every turn, so without this a session's cost per
+      // minute keeps growing. Tested on 3.8-live; do not combine with sessionResumption (no replies).
+      contextWindowCompression: LIVE_CONTEXT_WINDOW,
       ...(tools?.functionDeclarations.length
         ? { tools: [{ functionDeclarations: tools.functionDeclarations }] }
         : {}),
@@ -298,6 +325,7 @@ export async function startLiveSession(
 
       ws.onclose = (e: CloseEvent) => {
         console.log('[GLOSSOS] 🔌 WebSocket closed:', e.code, e.reason);
+        releaseLiveUrl(wsUrl, ready);
         if (ready) callbacks.onClose(e);
         else resolve({ failure: `${e.code}${e.reason ? ` ${e.reason}` : ''}` });
       };

@@ -14,6 +14,8 @@ const CLOCK_SKEW_SECONDS = 60;
 export interface VerifiedUser {
     uid: string;
     anonymous: boolean;
+    email?: string;
+    emailVerified?: boolean;
 }
 
 let certCache: { certs: Record<string, string> | null; expiresAt: number } = { certs: null, expiresAt: 0 };
@@ -61,7 +63,11 @@ export async function verifyFirebaseIdToken(token: string, projectId: string): P
     if (typeof payload.iat !== 'number' || payload.iat > now + CLOCK_SKEW_SECONDS) throw new Error('Token issued in the future');
     if (typeof payload.sub !== 'string' || !payload.sub) throw new Error('Missing subject');
 
-    return { uid: payload.sub, anonymous: payload.firebase?.sign_in_provider === 'anonymous' };
+    return {
+        uid: payload.sub,
+        anonymous: payload.firebase?.sign_in_provider === 'anonymous',
+        ...(typeof payload.email === 'string' ? { email: payload.email, emailVerified: payload.email_verified === true } : {}),
+    };
 }
 
 /** Test hook: clears the certificate cache. */

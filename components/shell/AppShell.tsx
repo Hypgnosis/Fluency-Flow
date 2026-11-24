@@ -11,6 +11,12 @@ import { NAV, PRIMARY_NAV, isAppMode, navItem, type AppMode } from './nav';
 import Conversation from '../Conversation';
 import { ShellCtx, type ShellApi } from './shellContext';
 import { naturalVoice } from '../../services/naturalVoice';
+import { MinutesChip, PlansSheet } from '../billing/PlansSheet';
+import {
+    cachedBillingStatus, onBillingStatus, onPaywall, refreshBillingStatus,
+    type BillingStatus, type PaywallRequest,
+} from '../../services/billing';
+import { PLANS } from '../../services/billing/plans';
 
 export { useShell } from './shellContext';
 
@@ -102,6 +108,40 @@ export const AppShell: React.FC = () => {
     }, [voiceActive, flash]);
 
     const api = useMemo<ShellApi>(() => ({ navigate, openSettings: () => setSettingsOpen(true), setVoiceActive }), [navigate]);
+
+    // ── Plans and AI minutes ──
+    const [billing, setBilling] = useState<BillingStatus | null>(cachedBillingStatus);
+    const [plansOpen, setPlansOpen] = useState(false);
+    const [paywall, setPaywall] = useState<PaywallRequest | null>(null);
+    useEffect(() => {
+        const offStatus = onBillingStatus(setBilling);
+        const offPaywall = onPaywall(req => { setPaywall(req); setPlansOpen(true); });
+        const onFocus = () => { if (document.visibilityState === 'visible') void refreshBillingStatus(); };
+        document.addEventListener('visibilitychange', onFocus);
+        void refreshBillingStatus();
+        return () => { offStatus(); offPaywall(); document.removeEventListener('visibilitychange', onFocus); };
+    }, []);
+    // Back from Stripe Checkout: the webhook can take a few seconds, so check a few times.
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const result = params.get('checkout');
+        if (!result) return;
+        params.delete('checkout');
+        const query = params.toString();
+        window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+        if (result !== 'success') return;
+        flash('Payment received. Setting up your plan…');
+        let tries = 0;
+        let timer: ReturnType<typeof setTimeout>;
+        const check = async () => {
+            const s = await refreshBillingStatus();
+            if (s && s.plan !== 'free') { flash(`Welcome to ${PLANS[s.plan].name}! Your minutes are ready.`); return; }
+            if (++tries < 8) timer = setTimeout(check, 2000);
+        };
+        void check();
+        return () => clearTimeout(timer);
+    }, [flash]);
+    const openPlans = useCallback(() => { setPaywall(null); setPlansOpen(true); }, []);
 
     // Lens, Chat read-aloud and word buttons speak with the tutor's natural Gemini voice.
     useEffect(() => { naturalVoice.configure({ enabled: true, voice: settings.voice }); }, [settings.voice]);
@@ -217,6 +257,8 @@ export const AppShell: React.FC = () => {
                             </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                            <span className="hidden sm:block"><MinutesChip status={billing} onClick={openPlans} /></span>
+                            <span className="sm:hidden"><MinutesChip compact status={billing} onClick={openPlans} /></span>
                             <span className="hidden sm:block"><LanguageChip onClick={() => setSettingsOpen(true)} /></span>
                             <span className="sm:hidden"><LanguageChip compact onClick={() => setSettingsOpen(true)} /></span>
                             <IconButton
@@ -326,6 +368,7 @@ export const AppShell: React.FC = () => {
 
             <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} locked={voiceActive} onOpenOffline={() => navigate('offline')} />
             <ProfileSheet open={profileOpen} onClose={() => setProfileOpen(false)} />
+            <PlansSheet open={plansOpen} onClose={() => setPlansOpen(false)} status={billing} reason={paywall} />
         </ShellCtx.Provider>
     );
 };

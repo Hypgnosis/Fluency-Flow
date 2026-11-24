@@ -11,6 +11,8 @@
  */
 
 import { verifyFirebaseIdToken, type VerifiedUser } from './firebaseAuth.ts';
+import { textCostUsd, type LivePurpose } from '../../services/billing/plans.ts';
+import type { Caller, Ledger, Refusal } from './billing/ledger.ts';
 
 const GEMINI_REST = 'https://generativelanguage.googleapis.com/v1beta';
 export const DEFAULT_TEXT_MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-transcribe'];
@@ -30,6 +32,25 @@ export interface ApiConfig {
     verifyToken?: (token: string, projectId: string) => Promise<VerifiedUser>;
     now?: () => number;
     log?: Pick<Console, 'warn' | 'error'>;
+    /** Plans and usage limits. Without it every signed-in user is unlimited. */
+    billing?: Ledger;
+}
+
+/** Netlify's per-request context; waitUntil lets bookkeeping finish after the response is sent. */
+export interface RequestContext {
+    waitUntil?: (p: Promise<unknown>) => void;
+}
+
+/** Runs bookkeeping after the response when the platform allows it, otherwise before. */
+async function later(ctx: RequestContext | undefined, work: () => Promise<unknown>, log: Pick<Console, 'error'>) {
+    const p = work().catch(err => log.error(`[api] bookkeeping failed: ${(err as Error).message}`));
+    if (ctx?.waitUntil) ctx.waitUntil(p);
+    else await p;
+}
+
+/** 402 with the reason, so the app can open the plans screen. */
+export function paywallResponse(refusal: Refusal): Response {
+    return jsonResponse(402, { error: { code: 402, message: refusal.message, reason: refusal.reason, plan: refusal.plan } });
 }
 
 /** Reads the function configuration from Netlify environment variables. */
@@ -74,13 +95,13 @@ function createRateLimiter(limit: number, now: () => number) {
     };
 }
 
-function createGuard(config: ApiConfig) {
+export function createGuard(config: ApiConfig) {
     const verify = config.verifyToken ?? verifyFirebaseIdToken;
     const log = config.log ?? console;
     const isLimited = createRateLimiter(config.rateLimitPerMinute ?? 30, config.now ?? Date.now);
 
-    /** Returns the caller's uid, or an error Response to send back. */
-    return async (req: Request): Promise<string | Response> => {
+    /** Returns the verified caller, or an error Response to send back. */
+    return async (req: Request): Promise<Caller | Response> => {
         if (req.method !== 'POST') return errorResponse(405, 'Use POST');
         if (!config.apiKey || !config.projectId) {
             log.error('[api] GEMINI_API_KEY and FIREBASE_PROJECT_ID must be set for Netlify Functions');
@@ -88,15 +109,15 @@ function createGuard(config: ApiConfig) {
         }
         const match = /^Bearer\s+(.+)$/i.exec(req.headers.get('authorization') || '');
         if (!match) return errorResponse(401, 'Sign in required');
-        let uid: string;
+        let user: VerifiedUser;
         try {
-            uid = (await verify(match[1], config.projectId)).uid;
+            user = await verify(match[1], config.projectId);
         } catch (err) {
             log.warn(`[api] Rejected token: ${(err as Error).message}`);
             return errorResponse(401, 'Your sign-in expired. Please sign in again.');
         }
-        if (isLimited(uid)) return errorResponse(429, 'Too many requests. Please wait a moment.');
-        return uid;
+        if (isLimited(user.uid)) return errorResponse(429, 'Too many requests. Please wait a moment.');
+        return { uid: user.uid, email: user.email, emailVerified: user.emailVerified, anonymous: user.anonymous };
     };
 }
 
@@ -129,7 +150,9 @@ export function createGenaiHandler(config: ApiConfig) {
     const allowedModels = config.allowedModels ?? DEFAULT_TEXT_MODELS;
     const log = config.log ?? console;
 
-    return async (req: Request): Promise<Response> => {
+    const billing = config.billing;
+
+    return async (req: Request, ctx?: RequestContext): Promise<Response> => {
         const { pathname } = new URL(req.url);
         const route = pathname.endsWith('/api/stream') ? 'stream' : pathname.endsWith('/api/generate') ? 'generate' : null;
         if (!route) return errorResponse(404, 'Not found');
@@ -143,6 +166,15 @@ export function createGenaiHandler(config: ApiConfig) {
             return errorResponse(400, `Model not allowed: ${String(body.model).slice(0, 80)}`);
         }
         if (!Array.isArray(body.contents) || body.contents.length === 0) return errorResponse(400, 'contents is required');
+        const model = body.model;
+
+        if (billing) {
+            const allowed = await billing.checkText(caller);
+            if (!allowed.ok) return paywallResponse(allowed as Refusal);
+        }
+        const charge = (usage: unknown) => billing
+            ? later(ctx, () => billing.chargeText(caller, textCostUsd(model, usage)), log)
+            : Promise.resolve();
 
         // Forward only these fields (no tools, safety overrides or cached content).
         const payload: Record<string, unknown> = { contents: body.contents };
@@ -165,12 +197,18 @@ export function createGenaiHandler(config: ApiConfig) {
         if (!upstream.ok) return upstreamError(upstream);
 
         if (route === 'generate') {
-            return new Response(await upstream.text(), {
+            const text = await upstream.text();
+            if (billing) {
+                let usage: unknown;
+                try { usage = JSON.parse(text)?.usageMetadata; } catch { /* not JSON */ }
+                await charge(usage);
+            }
+            return new Response(text, {
                 status: 200,
                 headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
             });
         }
-        return new Response(upstream.body, {
+        return new Response(billing && upstream.body ? meterStream(upstream.body, charge) : upstream.body, {
             status: 200,
             headers: {
                 'Content-Type': 'text/event-stream; charset=utf-8',
@@ -181,16 +219,68 @@ export function createGenaiHandler(config: ApiConfig) {
     };
 }
 
+/**
+ * Passes an SSE stream through unchanged while watching for Gemini's usageMetadata, and charges
+ * the last one seen when the stream ends.
+ */
+export function meterStream(body: ReadableStream<Uint8Array>, charge: (usage: unknown) => Promise<unknown>): ReadableStream<Uint8Array> {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let usage: unknown;
+    const scan = (final: boolean) => {
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = final ? '' : events.pop() ?? '';
+        for (const event of events) {
+            if (!event.includes('usageMetadata')) continue;
+            const data = event.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('\n');
+            try { usage = JSON.parse(data).usageMetadata ?? usage; } catch { /* partial or not JSON */ }
+        }
+    };
+    return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+            controller.enqueue(chunk);
+            buffer += decoder.decode(chunk, { stream: true });
+            if (buffer.length > 64_000) scan(false);
+        },
+        async flush() {
+            scan(false);
+            scan(true);
+            await charge(usage);
+        },
+    }));
+}
+
+const LIVE_PURPOSES: LivePurpose[] = ['talk', 'assist', 'voice'];
+
 /** Handler for /api/live-token: mints a one-use Gemini Live ephemeral token. */
 export function createLiveTokenHandler(config: ApiConfig) {
     const guard = createGuard(config);
     const fetchImpl = config.fetchImpl ?? fetch;
     const now = config.now ?? Date.now;
     const log = config.log ?? console;
+    const billing = config.billing;
 
     return async (req: Request): Promise<Response> => {
         const caller = await guard(req);
         if (caller instanceof Response) return caller;
+
+        let purpose: LivePurpose = 'talk';
+        try {
+            const body = JSON.parse((await req.text()) || '{}');
+            if (LIVE_PURPOSES.includes(body?.purpose)) purpose = body.purpose;
+        } catch { /* empty or invalid body: a Talk session */ }
+
+        // With billing, the session's time is reserved first and the token dies when it runs out.
+        let lifetimeMs = LIVE_TOKEN_LIFETIME_MS;
+        let lease: { leaseId: string; seconds: number } | null = null;
+        if (billing) {
+            const grant = await billing.reserveLive(caller, purpose);
+            if (!grant.ok) return paywallResponse(grant as Refusal);
+            const g = grant as { leaseId: string; seconds: number };
+            lease = { leaseId: g.leaseId, seconds: g.seconds };
+            lifetimeMs = Math.min(LIVE_TOKEN_LIFETIME_MS, (g.seconds + 30) * 1000);
+        }
+        const refund = () => (billing && lease ? billing.settleLive(caller, lease.leaseId, false).catch(() => null) : null);
 
         const t = now();
         let upstream: Response;
@@ -200,18 +290,25 @@ export function createLiveTokenHandler(config: ApiConfig) {
                 headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
                 body: JSON.stringify({
                     uses: 1,
-                    expireTime: new Date(t + LIVE_TOKEN_LIFETIME_MS).toISOString(),
-                    newSessionExpireTime: new Date(t + LIVE_TOKEN_START_WINDOW_MS).toISOString(),
+                    expireTime: new Date(t + lifetimeMs).toISOString(),
+                    newSessionExpireTime: new Date(t + Math.min(LIVE_TOKEN_START_WINDOW_MS, lifetimeMs)).toISOString(),
                 }),
             });
         } catch (err) {
             log.error(`[api] Token request failed: ${(err as Error).message}`);
+            await refund();
             return errorResponse(502, 'Gemini is unreachable right now');
         }
-        if (!upstream.ok) return upstreamError(upstream);
+        if (!upstream.ok) {
+            await refund();
+            return upstreamError(upstream);
+        }
 
         const data = (await upstream.json().catch(() => ({}))) as { name?: string };
-        if (!data.name) return errorResponse(502, 'Gemini did not return a token');
-        return jsonResponse(200, { token: data.name, expiresAt: t + LIVE_TOKEN_LIFETIME_MS });
+        if (!data.name) {
+            await refund();
+            return errorResponse(502, 'Gemini did not return a token');
+        }
+        return jsonResponse(200, { token: data.name, expiresAt: t + lifetimeMs, ...(lease ?? {}) });
     };
 }
