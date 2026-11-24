@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { ContactShadows, Float } from '@react-three/drei';
+import { ContactShadows, Float, MeshDistortMaterial } from '@react-three/drei';
 import * as THREE from 'three';
 
 // ─── GLOSSOS Color Palette ───
@@ -17,45 +17,94 @@ type ConnectionState = 'IDLE' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'E
 interface OrbProps {
   connectionState: ConnectionState;
   volume: number;
+  aiAnalyser?: AnalyserNode | null;
 }
 
 // Reusable vectors to avoid allocating inside useFrame
 const _targetScale = new THREE.Vector3();
 const _targetColor = new THREE.Color();
 
-// ─── Inner Core: An icosahedron with premium physical material ───
-function CoreOrb({ connectionState, volume }: OrbProps) {
+// ─── Inner Core: Dynamic distortion mesh reacting to AI audio frequencies ───
+function CoreOrb({ connectionState, volume, aiAnalyser }: OrbProps) {
   const meshRef = useRef<THREE.Mesh>(null!);
-  const matRef = useRef<THREE.MeshPhysicalMaterial>(null!);
+  const matRef = useRef<any>(null!);
   const [hovered, setHover] = useState(false);
+  const dataArray = useRef<Uint8Array | null>(null);
+
+  // Initialize frequency array once analyser is available
+  if (aiAnalyser && !dataArray.current) {
+    dataArray.current = new Uint8Array(aiAnalyser.frequencyBinCount);
+  }
 
   useFrame((state) => {
-    if (!meshRef.current) return;
+    if (!meshRef.current || !matRef.current) return;
 
-    // Smooth scale on hover + volume reactivity
-    const baseScale = connectionState === 'CONNECTED' ? 1.0 + volume * 0.35 : 1.0;
-    const s = hovered ? baseScale * 1.15 : baseScale;
+    // ─── Read AI audio frequencies at 60fps ───
+    let aiVolume = 0;
+    if (aiAnalyser && dataArray.current) {
+      aiAnalyser.getByteFrequencyData(dataArray.current);
+      const sum = dataArray.current.reduce((a, b) => a + b, 0);
+      aiVolume = (sum / dataArray.current.length) / 255;
+    }
+
+    const isSpeaking = aiVolume > 0.05;
+    const isListening = volume > 0.1;
+
+    let targetScale = 1.0;
+    let targetDistort = 0.0;
+    let targetSpeed = 1.0;
+
+    if (connectionState === 'CONNECTED') {
+      if (isSpeaking) {
+        // AI is talking — violent distortion and scale
+        targetScale = 1.2 + (aiVolume * 0.8);
+        targetDistort = 0.4 + (aiVolume * 0.6);
+        targetSpeed = 4 + (aiVolume * 5);
+        _targetColor.copy(COLORS.terminalGreen);
+      } else if (isListening) {
+        // User is talking — smooth breathing
+        targetScale = 1.1 + (volume * 0.4);
+        targetDistort = 0.2;
+        targetSpeed = 2;
+        _targetColor.copy(COLORS.sacredAmber);
+      } else {
+        // Idle
+        targetScale = 1.0;
+        targetDistort = 0.1;
+        targetSpeed = 1;
+        _targetColor.copy(COLORS.terminalGreen);
+      }
+    } else if (connectionState === 'CONNECTING') {
+      targetScale = 1.1;
+      targetDistort = 0.3;
+      targetSpeed = 3;
+      _targetColor.copy(COLORS.sacredAmber);
+    } else if (connectionState === 'ERROR') {
+      targetScale = 0.9;
+      targetDistort = 0.5;
+      targetSpeed = 6;
+      _targetColor.copy(COLORS.error);
+    } else {
+      // IDLE / DISCONNECTED
+      targetScale = 1.0;
+      targetDistort = 0.1;
+      targetSpeed = 1;
+      _targetColor.copy(COLORS.sacredAmber);
+    }
+
+    // ─── Smooth interpolation of all visual properties ───
+    const s = hovered ? targetScale * 1.15 : targetScale;
     _targetScale.set(s, s, s);
-    meshRef.current.scale.lerp(_targetScale, 0.08);
+    meshRef.current.scale.lerp(_targetScale, 0.1);
 
-    // Gentle rotation
+    matRef.current.distort = THREE.MathUtils.lerp(matRef.current.distort, targetDistort, 0.1);
+    matRef.current.speed = THREE.MathUtils.lerp(matRef.current.speed, targetSpeed, 0.1);
+    matRef.current.color.lerp(_targetColor, 0.05);
+    matRef.current.emissive.lerp(_targetColor, 0.05);
+
+    // Gentle ambient rotation
     meshRef.current.rotation.y += 0.004;
     meshRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.3) * 0.1;
-
-    // Smooth color transition
-    if (matRef.current) {
-      if (connectionState === 'CONNECTED') {
-        _targetColor.copy(COLORS.terminalGreen);
-      } else if (connectionState === 'CONNECTING') {
-        _targetColor.copy(COLORS.sacredAmber);
-      } else if (connectionState === 'ERROR') {
-        _targetColor.copy(COLORS.error);
-      } else {
-        _targetColor.copy(COLORS.sacredAmber);
-      }
-      matRef.current.color.lerp(_targetColor, 0.04);
-      matRef.current.emissive.lerp(_targetColor, 0.03);
-    }
   });
 
   return (
@@ -64,18 +113,20 @@ function CoreOrb({ connectionState, volume }: OrbProps) {
       onPointerOver={() => { setHover(true); document.body.style.cursor = 'pointer'; }}
       onPointerOut={() => { setHover(false); document.body.style.cursor = 'auto'; }}
     >
-      <icosahedronGeometry args={[1.3, 1]} />
-      <meshPhysicalMaterial
+      <sphereGeometry args={[1.3, 64, 64]} />
+      <MeshDistortMaterial
         ref={matRef}
         color="#FFBF00"
         emissive="#FFBF00"
-        emissiveIntensity={0.15}
-        roughness={0.18}
-        metalness={0.4}
+        emissiveIntensity={0.2}
+        roughness={0.2}
+        metalness={0.6}
         clearcoat={1}
         clearcoatRoughness={0.05}
         transparent
         opacity={0.88}
+        distort={0}
+        speed={1}
       />
     </mesh>
   );
@@ -199,7 +250,7 @@ function Spinner() {
 }
 
 // ─── Main Scene ───
-function Scene({ connectionState, volume }: OrbProps) {
+function Scene({ connectionState, volume, aiAnalyser }: OrbProps) {
   return (
     <>
       {/* Simple lighting — no Environment preset needed */}
@@ -213,7 +264,7 @@ function Scene({ connectionState, volume }: OrbProps) {
         rotationIntensity={0.3}
         floatIntensity={connectionState === 'CONNECTED' ? 0.4 : 1}
       >
-        <CoreOrb connectionState={connectionState} volume={volume} />
+        <CoreOrb connectionState={connectionState} volume={volume} aiAnalyser={aiAnalyser} />
         <WireframeShell connectionState={connectionState} volume={volume} />
         <OrbitalRing connectionState={connectionState} volume={volume} />
         <OrbitalRing2 />
@@ -234,7 +285,7 @@ function Scene({ connectionState, volume }: OrbProps) {
 }
 
 // ─── Public Component ───
-export default function GlossosOrb({ connectionState = 'IDLE', volume = 0 }: Partial<OrbProps>) {
+export default function GlossosOrb({ connectionState = 'IDLE', volume = 0, aiAnalyser }: Partial<OrbProps>) {
   return (
     <div className="glossos-orb-container">
       <Canvas
@@ -243,7 +294,7 @@ export default function GlossosOrb({ connectionState = 'IDLE', volume = 0 }: Par
         gl={{ antialias: true, alpha: true, powerPreference: 'default' }}
         style={{ background: 'transparent' }}
       >
-        <Scene connectionState={connectionState} volume={volume} />
+        <Scene connectionState={connectionState} volume={volume} aiAnalyser={aiAnalyser} />
       </Canvas>
     </div>
   );

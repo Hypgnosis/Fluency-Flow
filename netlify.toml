@@ -1,0 +1,9 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  # Server-side code (Gemini key lives here, never in the browser bundle):
+  #   netlify/functions/genai.mts       -> /api/generate, /api/stream
+  #   netlify/functions/live-token.mts  -> /api/live-token
+  directory = "netlify/functions"

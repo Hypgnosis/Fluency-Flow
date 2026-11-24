@@ -1,21 +1,55 @@
 import React, { useState, useRef, useCallback, useEffect, Suspense, lazy } from 'react';
 import { startLiveSession, createBlob } from '../services/geminiService';
 import { decode, decodeAudioData, encodeWAV } from '../utils/audioUtils';
-import { TranscriptionEntry, VocabularyCard } from '../types';
+import { TranscriptionEntry } from '../types';
 import { MicrophoneIcon, StopIcon, PlayIcon, ChevronDownIcon } from './icons/Icons';
 import PronunciationScoreCircle from './PronunciationScoreCircle';
 import { useAuth, AuthModal } from './AuthModal';
-import { saveSession, loadUserContext } from '../services/sessionManager';
+import { saveSession, loadUserContext, parseProfileMistakes } from '../services/sessionManager';
 import { PronunciationAnalysisCard } from './PhoneticFeedback';
 import { AudioComparisonPlayer } from './AudioComparisonPlayer';
 import { createMockPhoneticAnalysis } from '../services/phoneticAnalysis';
-import { CameraCapture } from './CameraCapture';
-import { VocabularyCardDisplay, VocabularyCollection } from './VocabularyCard';
-import { analyzeImageForVocabulary } from '../services/visionService';
 import { shouldGenerateImage, generateSceneImage } from '../services/imageGenerationService';
 import { SceneImage, SceneImageSkeleton } from './SceneImage';
+import { useMobileResilience, resumeAudioContextsIfSuspended } from '../hooks/useMobileResilience';
+import { useWebSocketSession, MAX_RECONNECT_ATTEMPTS } from '../hooks/useWebSocketSession';
+import { glossosLog, glossosWarn, glossosError, mobileLog } from '../utils/debugLog';
+import { SkillsPanel } from './skills/SkillsPanel';
+import { SkillAttachmentView } from './skills/SkillAttachmentView';
+import {
+    buildFunctionDeclarations, buildSkillsInstruction, enabledSkills, executeToolCalls, loadSkillPrefs, newReviewMemory,
+    runTurnReview, saveSkillPrefs, SkillPrefs,
+} from '../services/tutorSkills/registry';
+import { defaultSkillServices, describeAttachment } from '../services/tutorSkills/services';
+import type { LiveFunctionCall, SkillAttachment, SkillContext, TutorSkill } from '../services/tutorSkills/types';
 
 const GlossosOrb = lazy(() => import('./GlossosOrb'));
+const LensTeacher = lazy(() => import('./lens/LensTeacher'));
+const ChatTutor = lazy(() => import('./chat/ChatTutor').then(m => ({ default: m.ChatTutor })));
+const WritingLab = lazy(() => import('./lab/WritingLab').then(m => ({ default: m.WritingLab })));
+const OfflinePanel = lazy(() => import('./offline/OfflinePanel'));
+const AudioScribe = lazy(() => import('./scribe/AudioScribe'));
+
+/** Top-level modes (Gallery-style task tiles, shown as a mode bar). */
+type AppMode = 'voice' | 'lens' | 'chat' | 'lab' | 'scribe' | 'offline';
+
+const MODE_ICONS: Record<AppMode, string> = {
+    voice: 'M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z',
+    lens: 'M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z',
+    chat: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z',
+    lab: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',
+    scribe: 'M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3',
+    offline: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4',
+};
+
+const MODES: { id: AppMode; label: string; title: string }[] = [
+    { id: 'voice', label: 'Voice', title: 'Talk with your tutor in real time' },
+    { id: 'lens', label: 'Lens', title: 'Point your camera and learn words' },
+    { id: 'chat', label: 'Chat', title: 'Practice by text (works offline with an on-device model)' },
+    { id: 'lab', label: 'Writing', title: 'Writing Lab: correct, rewrite, translate, explain, conjugate' },
+    { id: 'scribe', label: 'Scribe', title: 'Audio Scribe: transcribe and translate a song, voice note or podcast clip' },
+    { id: 'offline', label: 'Offline', title: 'Download a model to use Glossos without internet' },
+];
 
 
 type ConnectionState = 'IDLE' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR';
@@ -40,6 +74,13 @@ const LEVEL_COLORS: Record<string, { accent: string; glow: string; text: string 
     'Intermediate': { accent: '#00FF41', glow: 'from-[#00FF41]/10 via-transparent to-transparent', text: 'text-[#00FF41]' },
     'Advanced': { accent: '#FFBF00', glow: 'from-[#FFBF00]/15 via-transparent to-transparent', text: 'text-[#FFBF00]' },
 };
+
+/** Audio buffer size for ScriptProcessor/WorkletNode (lower = less latency) */
+const AUDIO_BUFFER_SIZE = 2048;
+/** Output AudioContext sample rate — matches Gemini's 24kHz output */
+const OUTPUT_SAMPLE_RATE = 24000;
+/** How long to wait for first AI response before showing a hint (ms) */
+const CONNECTION_TIMEOUT_MS = 15000;
 
 const getDefaultLanguage = () => {
     if (typeof navigator === 'undefined') return 'English';
@@ -75,12 +116,16 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
     const [showAuthModal, setShowAuthModal] = useState(false);
     const [sessionStartTime, setSessionStartTime] = useState<number>(0);
 
-    // Vision Mode (Phase 5)
-    const [isVisionMode, setIsVisionMode] = useState(false);
-    const [showCamera, setShowCamera] = useState(false);
-    const [vocabularyCards, setVocabularyCards] = useState<VocabularyCard[]>([]);
-    const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+    // Lens mode (port of Google AI Edge Gallery's XR Language Teacher)
+    const [mode, setMode] = useState<AppMode>('voice');
+    const isVoiceMode = mode === 'voice';
     const [sceneImagesEnabled, setSceneImagesEnabled] = useState(true);
+    // Tutor Skills (port of Google AI Edge Gallery's Agent Skills onto Live API function calling)
+    const [skillPrefs, setSkillPrefs] = useState<SkillPrefs>(() => loadSkillPrefs());
+    const [showSkills, setShowSkills] = useState(false);
+    const activeSkillsRef = useRef<{ skills: TutorSkill[]; ctx: SkillContext } | null>(null);
+    const reviewMemoryRef = useRef(newReviewMemory());
+    const profileMistakesRef = useRef<{ incorrect: string; correct: string }[]>([]);
     const [messageCount, setMessageCount] = useState(0);
     const [audioChunkCount, setAudioChunkCount] = useState(0);
     const [debugLog, setDebugLog] = useState<string[]>([]);
@@ -89,14 +134,27 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         setDebugLog(prev => [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] ${msg}`]);
     }, []);
 
-    const sessionPromiseRef = useRef<ReturnType<typeof startLiveSession> | null>(null);
+    // ─── WebSocket session hook (keepalive, reconnect, session params) ───
+    const {
+        sessionPromiseRef,
+        isIntentionalStopRef,
+        reconnectAttemptsRef,
+        lastStartParamsRef,
+        startKeepalive,
+        stopKeepalive,
+        storeSessionParams,
+        markIntentionalStop,
+        createOnCloseHandler,
+    } = useWebSocketSession();
+
     const inputAudioContextRef = useRef<AudioContext | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+    const scriptProcessorRef = useRef<ScriptProcessorNode | AudioWorkletNode | null>(null);
     const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
     const userMediaStreamRef = useRef<MediaStream | null>(null);
     const nextStartTimeRef = useRef<number>(0);
     const outputSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    const outputAnalyserRef = useRef<AnalyserNode | null>(null);
     const connectionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const recognitionRef = useRef<any>(null);
 
@@ -104,9 +162,14 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
     const currentOutputTranscriptionRef = useRef({ id: -1, text: '' });
     const currentAudioChunksRef = useRef<Float32Array[]>([]);
     const logContainerRef = useRef<HTMLDivElement>(null);
+    const latestTranscriptionLogRef = useRef<TranscriptionEntry[]>([]);
+    const sessionStartTimeRef = useRef<number>(0);
+    const isSavingRef = useRef<boolean>(false);
+    const playbackAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // Auto-scroll to bottom
     useEffect(() => {
+        latestTranscriptionLogRef.current = transcriptionLog;
         if (logContainerRef.current) {
             const scrollOptions: ScrollToOptions = {
                 top: logContainerRef.current.scrollHeight,
@@ -116,18 +179,38 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
     }, [transcriptionLog]);
 
+    // ─── MOBILE RESILIENCE: Visibility resume + Wake Lock (extracted to hook) ───
+    useMobileResilience({
+        connectionState,
+        inputAudioContextRef,
+        outputAudioContextRef,
+        nextStartTimeRef,
+        addDebugLog,
+    });
+
     const cleanupResources = useCallback(() => {
-        transcriptionLog.forEach(entry => {
+        // Use ref instead of state to avoid stale closure — state captured
+        // by useCallback would be outdated if transcriptionLog changed
+        latestTranscriptionLogRef.current.forEach(entry => {
             if (entry.audioUrl) {
                 URL.revokeObjectURL(entry.audioUrl);
             }
         });
 
+        // Stop any playback audio
+        if (playbackAudioRef.current) {
+            playbackAudioRef.current.pause();
+            playbackAudioRef.current = null;
+        }
+
         if (recognitionRef.current) {
             recognitionRef.current.onend = null;
-            try { recognitionRef.current.stop(); } catch(e) {}
+            try { recognitionRef.current.stop(); } catch(e) { glossosError('Recognition stop failed:', e); }
             recognitionRef.current = null;
         }
+
+        // ─── MOBILE RESILIENCE: Clear keepalive interval ───
+        stopKeepalive();
 
         if (userMediaStreamRef.current) {
             userMediaStreamRef.current.getTracks().forEach(track => track.stop());
@@ -144,11 +227,15 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
 
         if (inputAudioContextRef.current && inputAudioContextRef.current.state !== 'closed') {
-            inputAudioContextRef.current.close().catch(console.error);
+            inputAudioContextRef.current.close().catch(e => glossosError('Failed to close input AudioContext:', e));
             inputAudioContextRef.current = null;
         }
+        if (outputAnalyserRef.current) {
+            outputAnalyserRef.current.disconnect();
+            outputAnalyserRef.current = null;
+        }
         if (outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed') {
-            outputAudioContextRef.current.close().catch(console.error);
+            outputAudioContextRef.current.close().catch(e => glossosError('Failed to close output AudioContext:', e));
             outputAudioContextRef.current = null;
         }
 
@@ -157,9 +244,12 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         nextStartTimeRef.current = 0;
         setVolume(0);
 
-    }, [transcriptionLog]);
+    }, []); // No state dependencies — uses refs only
 
     const stopConversation = useCallback(async () => {
+        // Mark as intentional stop so onClose doesn't also try to save
+        markIntentionalStop();
+
         if (sessionPromiseRef.current) {
             sessionPromiseRef.current.then((session) => {
                 session.close();
@@ -168,41 +258,36 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
 
         // Save session if user is authenticated and there are transcriptions
-        if (user && transcriptionLog.length > 0 && sessionStartTime > 0) {
-            const duration = Math.floor((Date.now() - sessionStartTime) / 1000); // seconds
-            await saveSession(transcriptionLog, selectedLanguage, duration);
+        // Use refs to avoid stale closure — state values captured by useCallback may be outdated
+        const currentTranscriptions = latestTranscriptionLogRef.current;
+        const currentStartTime = sessionStartTimeRef.current;
+        if (user && currentTranscriptions.length > 0 && currentStartTime > 0 && !isSavingRef.current) {
+            isSavingRef.current = true;
+            const duration = Math.floor((Date.now() - currentStartTime) / 1000); // seconds
+            glossosLog(`Saving session: ${currentTranscriptions.length} entries, ${duration}s`);
+            try {
+                const docId = await saveSession(currentTranscriptions, selectedLanguage, duration);
+                if (docId) {
+                    glossosLog(`Session saved: ${docId}`);
+                } else {
+                    glossosWarn('Session save returned null (Firebase not configured or user not authenticated)');
+                }
+            } catch (saveError) {
+                glossosError('Session save failed:', saveError);
+                setError('Failed to save session progress. Your conversation was not saved.');
+            } finally {
+                isSavingRef.current = false;
+            }
+        } else {
+            glossosLog(`Session not saved — user: ${!!user}, entries: ${currentTranscriptions.length}, startTime: ${currentStartTime}, alreadySaving: ${isSavingRef.current}`);
         }
 
         cleanupResources();
         setConnectionState('IDLE');
         setSessionStartTime(0);
-    }, [cleanupResources, user, transcriptionLog, selectedLanguage, sessionStartTime]);
-
-    // Vision Mode Handlers (Phase 5)
-    const handleCameraCapture = useCallback(async (imageDataUrl: string) => {
-        setShowCamera(false);
-        setIsAnalyzingImage(true);
-        setError(null);
-
-        try {
-            const result = await analyzeImageForVocabulary(imageDataUrl, selectedLanguage);
-            setVocabularyCards(prev => [result.vocabularyCard, ...prev]);
-        } catch (err) {
-            console.error('Vision analysis error:', err);
-            setError('Failed to analyze image. Please try again.');
-        } finally {
-            setIsAnalyzingImage(false);
-        }
-    }, [selectedLanguage]);
-
-    const handlePracticeCard = useCallback((cardId: string) => {
-        const card = vocabularyCards.find(c => c.id === cardId);
-        if (!card) return;
-
-        // TODO: Launch conversation mode with focus on this word
-        console.log('Practice card:', card.word);
-        setIsVisionMode(false);
-    }, [vocabularyCards]);
+        sessionStartTimeRef.current = 0;
+        isIntentionalStopRef.current = false;
+    }, [cleanupResources, user, selectedLanguage, markIntentionalStop]);
 
     // Help Me functionality
     const handleHelpMe = useCallback(() => {
@@ -268,16 +353,39 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         }
     }, [sceneImagesEnabled, selectedLanguage]);
 
-    const handleDeleteCard = useCallback((cardId: string) => {
-        setVocabularyCards(prev => prev.filter(c => c.id !== cardId));
+    /** Adds what a skill showed (mistake noted, word saved, card...) to the conversation. */
+    const appendAttachments = useCallback((attachments: SkillAttachment[]) => {
+        if (attachments.length === 0) return;
+        const now = Date.now();
+        setTranscriptionLog(prev => [
+            ...prev,
+            ...attachments.map((attachment, i) => ({
+                id: now + (i + 1) / 1000 + Math.random() / 1e6,
+                speaker: 'Tutor' as const,
+                text: describeAttachment(attachment),
+                isFinal: true,
+                timestamp: now,
+                attachment,
+            })),
+        ]);
     }, []);
 
+    /** Runs the tutor's live tool calls (e.g. Wikipedia), answers them, and shows their results. */
+    const handleToolCall = useCallback(async (calls: LiveFunctionCall[]) => {
+        const active = activeSkillsRef.current;
+        if (!active || calls.length === 0) return;
+        addDebugLog(`Tool call: ${calls.map(c => c.name).join(', ')}`);
+        const liveSkills = active.skills.filter(s => s.mode === 'live');
+        const { responses, attachments } = await executeToolCalls(calls, liveSkills, active.ctx);
+        sessionPromiseRef.current?.then(session => session.sendToolResponse(responses)).catch(glossosError);
+        appendAttachments(attachments);
+    }, [addDebugLog, appendAttachments]);
 
     const handleMessage = useCallback(async (message: any) => {
         try {
             // Log all messages for debugging
             const msgKeys = Object.keys(message);
-            console.log('[GLOSSOS] Message received:', msgKeys.join(', '), message);
+            glossosLog('Message received:', msgKeys.join(', '), message);
             // Don't flood the UI log with every message, just non-content ones or errors
             if (!message.serverContent) {
                 addDebugLog(`Msg: ${msgKeys.join(', ')}`);
@@ -291,7 +399,16 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             // Handle setup complete
             if ((message as any).setupComplete) {
                 addDebugLog('Setup Complete! Session Ready');
-                console.log('[GLOSSOS] ✅ Setup complete — session is ready');
+                glossosLog('Setup complete — session is ready');
+                return;
+            }
+
+            if (message.toolCall) {
+                handleToolCall(message.toolCall.functionCalls ?? []);
+                return;
+            }
+            if (message.toolCallCancellation) {
+                glossosLog('Tool calls cancelled:', message.toolCallCancellation.ids);
                 return;
             }
 
@@ -304,7 +421,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                 if (message.serverContent.inputTranscription) {
                     const { text } = message.serverContent.inputTranscription;
-                    console.log('[GLOSSOS] 🎤 Input transcription:', text);
+                    glossosLog('Input transcription:', text);
                     setTranscriptionLog(prev => {
                         const existingEntryIndex = prev.findIndex(e => e.id === currentInputTranscriptionRef.current.id);
                         if (existingEntryIndex === -1 && text) {
@@ -323,7 +440,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                 if (message.serverContent.outputTranscription) {
                     const { text } = message.serverContent.outputTranscription;
-                    console.log('[GLOSSOS] 🤖 Output transcription:', text);
+                    glossosLog('Output transcription:', text);
                     setTranscriptionLog(prev => {
                         const existingEntryIndex = prev.findIndex(e => e.id === currentOutputTranscriptionRef.current.id);
                         if (existingEntryIndex === -1 && text) {
@@ -342,7 +459,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 }
 
                 if (message.serverContent.turnComplete) {
-                    console.log('[GLOSSOS] ✅ Turn complete');
+                    glossosLog('Turn complete');
                     const inputId = currentInputTranscriptionRef.current.id;
                     const outputId = currentOutputTranscriptionRef.current.id;
                     // Cast turnComplete to any to access runtime properties
@@ -393,6 +510,20 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         handleGenerateSceneImage(outputEntryId, outputText);
                     }
 
+                    // Tutor Skills: review the finished exchange in the background
+                    // (mistake memory, saved words, phrase cards, progress tracking).
+                    const active = activeSkillsRef.current;
+                    if (active && outputText) {
+                        runTurnReview({
+                            learnerText: currentInputTranscriptionRef.current.text,
+                            tutorText: outputText,
+                            skills: active.skills,
+                            ctx: active.ctx,
+                            profileMistakes: profileMistakesRef.current,
+                            memory: reviewMemoryRef.current,
+                        }).then(appendAttachments);
+                    }
+
                     currentInputTranscriptionRef.current = { id: -1, text: '' };
                     currentOutputTranscriptionRef.current = { id: -1, text: '' };
                 }
@@ -401,33 +532,17 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                     const modelTurn = message.serverContent.modelTurn;
                     if (modelTurn.parts && modelTurn.parts.length > 0) {
                         for (const part of modelTurn.parts) {
-                            // Extract text part if present
-                            if (part.text) {
-                                const text = part.text;
-                                setTranscriptionLog(prev => {
-                                    const existingEntryIndex = prev.findIndex(e => e.id === currentOutputTranscriptionRef.current.id);
-                                    if (existingEntryIndex === -1 && text) {
-                                        const newId = Date.now();
-                                        currentOutputTranscriptionRef.current = { id: newId, text };
-                                        return [...prev, { id: newId, speaker: 'Tutor', text, isFinal: false }];
-                                    } else if (existingEntryIndex !== -1) {
-                                        const newLog = [...prev];
-                                        const newText = newLog[existingEntryIndex].text + text;
-                                        newLog[existingEntryIndex] = { ...newLog[existingEntryIndex], text: newText };
-                                        currentOutputTranscriptionRef.current.text = newText;
-                                        return newLog;
-                                    }
-                                    return prev;
-                                });
-                            }
+                            // NOTE: We intentionally do NOT render part.text here.
+                            // modelTurn text contains the AI's raw thinking/processing/instructions
+                            // which should not appear in the chat. The actual spoken words are
+                            // captured via outputTranscription above — that's what the user sees.
 
-                            // Extract and play audio part if present
+                            // Extract and play audio part only
                             const audioData = part?.inlineData?.data;
                             if (audioData && outputAudioContextRef.current) {
                                 try {
-                                    if (outputAudioContextRef.current.state === 'suspended') {
-                                        await outputAudioContextRef.current.resume();
-                                    }
+                                    // ─── MOBILE RESILIENCE: Resume both AudioContexts ───
+                                    await resumeAudioContextsIfSuspended(inputAudioContextRef, outputAudioContextRef, nextStartTimeRef);
 
                                     const audioBytes = decode(audioData);
                                     const audioBuffer = await decodeAudioData(audioBytes, outputAudioContextRef.current, 24000, 1);
@@ -437,7 +552,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                                     const source = outputAudioContextRef.current.createBufferSource();
                                     source.buffer = audioBuffer;
-                                    source.connect(outputAudioContextRef.current.destination);
+                                    if (outputAnalyserRef.current) {
+                                        source.connect(outputAnalyserRef.current);
+                                    } else {
+                                        source.connect(outputAudioContextRef.current.destination);
+                                    }
 
                                     source.onended = () => {
                                         outputSourcesRef.current.delete(source);
@@ -448,7 +567,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                     setAudioChunkCount(prev => prev + 1);
                                     outputSourcesRef.current.add(source);
                                 } catch (audioErr) {
-                                    console.error('[GLOSSOS] Audio playback error:', audioErr);
+                                    glossosError('Audio playback error:', audioErr);
                                 }
                             }
                         }
@@ -456,16 +575,16 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 }
 
                 if (message.serverContent?.interrupted) {
-                    console.log('[GLOSSOS] ⚠️ Interrupted');
+                    glossosLog('Interrupted');
                     outputSourcesRef.current.forEach(source => source.stop());
                     outputSourcesRef.current.clear();
                     nextStartTimeRef.current = 0;
                 }
             }
         } catch (msgErr) {
-            console.error('[GLOSSOS] Error handling server message:', msgErr);
+            glossosError('Error handling server message:', msgErr);
         }
-    }, [addDebugLog, handleGenerateSceneImage]);
+    }, [addDebugLog, handleGenerateSceneImage, handleToolCall, appendAttachments]);
 
     const startConversation = async () => {
         addDebugLog('Start clicked');
@@ -489,17 +608,26 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         setTranscriptionLog([]);
         currentInputTranscriptionRef.current = { id: -1, text: '' };
         currentOutputTranscriptionRef.current = { id: -1, text: '' };
-        setSessionStartTime(Date.now());
+        const now = Date.now();
+        setSessionStartTime(now);
+        sessionStartTimeRef.current = now;
 
         // NOW create fresh AudioContexts synchronously — still within the user gesture
         // This MUST happen after cleanup (which nulls the refs) and before any await
         try {
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             inputAudioContextRef.current = new AudioContextClass();
-            outputAudioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
+            outputAudioContextRef.current = new AudioContextClass({ sampleRate: OUTPUT_SAMPLE_RATE });
+
+            // ─── AI OUTPUT ANALYSER: for real-time orb frequency visualization ───
+            outputAnalyserRef.current = outputAudioContextRef.current.createAnalyser();
+            outputAnalyserRef.current.fftSize = 256;
+            outputAnalyserRef.current.smoothingTimeConstant = 0.7;
+            outputAnalyserRef.current.connect(outputAudioContextRef.current.destination);
+
             addDebugLog(`AudioContexts created (In: ${inputAudioContextRef.current.state}, Out: ${outputAudioContextRef.current.state})`);
         } catch (e) {
-            console.error('[GLOSSOS] Failed to create AudioContext:', e);
+            glossosError('Failed to create AudioContext:', e);
             setError('Failed to initialize audio. Please try again.');
             setConnectionState('ERROR');
             return;
@@ -514,6 +642,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
         try {
             // Load user context for personalization
             const userContext = await loadUserContext(user.uid);
+
+            // Check for secure context (getUserMedia requires HTTPS or localhost)
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('Microphone access requires a secure connection. Please use localhost:3001 instead of the network IP address.');
+            }
 
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -532,12 +665,9 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             addDebugLog(`AudioContexts resumed (In: ${inputAudioContextRef.current!.state}, Out: ${outputAudioContextRef.current!.state})`);
 
             mediaStreamSourceRef.current = inputAudioContextRef.current.createMediaStreamSource(stream);
-            // Reduced buffer size to 2048 for lower latency (approx 40-50ms at 48k)
-            scriptProcessorRef.current = inputAudioContextRef.current.createScriptProcessor(2048, 1, 1);
 
-            scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
-                const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-
+            // ─── Shared audio processing callback ───
+            const processAudioChunk = (inputData: Float32Array) => {
                 // Calculate volume for visualizer
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) {
@@ -550,109 +680,135 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 currentAudioChunksRef.current.push(new Float32Array(inputData));
 
                 if (inputAudioContextRef.current) {
-                    // Pass actual sample rate so createBlob can downsample to 16k if needed
                     const currentSampleRate = inputAudioContextRef.current.sampleRate;
                     const pcmBlob = createBlob(inputData, currentSampleRate);
                     sessionPromiseRef.current?.then((session) => {
                         try {
                             session.sendRealtimeInput({ media: pcmBlob });
                         } catch (sendErr) {
-                            console.error('[GLOSSOS] Error sending audio:', sendErr);
+                            glossosError('Error sending audio:', sendErr);
                         }
                     }).catch((sessionErr) => {
-                        console.error('[GLOSSOS] Session promise rejected:', sessionErr);
+                        glossosError('Session promise rejected:', sessionErr);
                     });
                 }
             };
 
-            mediaStreamSourceRef.current.connect(scriptProcessorRef.current);
+            // ─── AudioWorklet (preferred) — processes audio off the main thread ───
+            // Falls back to ScriptProcessorNode for browsers without AudioWorklet support
+            let audioNodeConnected = false;
+            if (inputAudioContextRef.current.audioWorklet) {
+                try {
+                    await inputAudioContextRef.current.audioWorklet.addModule('/audio-processor-worklet.js');
+                    const workletNode = new AudioWorkletNode(inputAudioContextRef.current, 'audio-capture-processor');
+                    workletNode.port.onmessage = (event) => {
+                        if (event.data.type === 'audio') {
+                            processAudioChunk(event.data.buffer);
+                        }
+                    };
+                    mediaStreamSourceRef.current.connect(workletNode);
+                    // AudioWorkletNode doesn't need a destination connection to stay alive
+                    workletNode.connect(inputAudioContextRef.current.destination);
+                    scriptProcessorRef.current = workletNode;
+                    audioNodeConnected = true;
+                    mobileLog('Using AudioWorkletNode (off main thread)');
+                    addDebugLog('Audio: WorkletNode (off-thread)');
+                } catch (workletErr) {
+                    mobileLog('AudioWorklet failed, falling back to ScriptProcessor:', workletErr);
+                }
+            }
 
-            const silentGain = inputAudioContextRef.current.createGain();
-            silentGain.gain.value = 0;
-            scriptProcessorRef.current.connect(silentGain);
-            silentGain.connect(inputAudioContextRef.current.destination);
+            // ─── Fallback: ScriptProcessorNode (deprecated but universally supported) ───
+            if (!audioNodeConnected) {
+                const scriptNode = inputAudioContextRef.current.createScriptProcessor(AUDIO_BUFFER_SIZE, 1, 1);
+                scriptNode.onaudioprocess = (audioProcessingEvent) => {
+                    processAudioChunk(audioProcessingEvent.inputBuffer.getChannelData(0));
+                };
+                mediaStreamSourceRef.current.connect(scriptNode);
+                const silentGain = inputAudioContextRef.current.createGain();
+                silentGain.gain.value = 0;
+                scriptNode.connect(silentGain);
+                silentGain.connect(inputAudioContextRef.current.destination);
+                scriptProcessorRef.current = scriptNode;
+                mobileLog('Using ScriptProcessorNode (fallback)');
+                addDebugLog('Audio: ScriptProcessor (fallback)');
+            }
 
             addDebugLog('Connecting to Gemini...');
+            // ─── MOBILE RESILIENCE: Store params for auto-reconnect ───
+            // ─── Tutor Skills: declare the enabled tools for this session ───
+            const skills = enabledSkills(skillPrefs);
+            reviewMemoryRef.current = newReviewMemory();
+            profileMistakesRef.current = parseProfileMistakes(userContext || '');
+            activeSkillsRef.current = {
+                skills,
+                ctx: { nativeLanguage, learnLanguage: selectedLanguage, level: proficiencyLevel, services: defaultSkillServices },
+            };
+            const tools = skills.length
+                ? { functionDeclarations: buildFunctionDeclarations(skills), instructions: buildSkillsInstruction(skills) }
+                : undefined;
+            storeSessionParams({ language: selectedLanguage, userContext: userContext || '', proficiencyLevel, nativeLanguage, voiceName: selectedVoice, tools });
+
+            // ─── Create onClose handler with reconnection logic (from hook) ───
+            const handleWsClose = createOnCloseHandler({
+                addDebugLog,
+                setConnectionState,
+                setError,
+                handleMessage,
+                cleanupResources,
+                inputAudioContextRef,
+                outputAudioContextRef,
+                outputSourcesRef,
+                nextStartTimeRef,
+                onFinalDisconnect: (eventCode: number) => {
+                    if (eventCode !== 1000 && reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+                        setError('Connection lost. Please restart the session.');
+                    }
+
+                    // Save on abnormal disconnects (stopConversation handles intentional saves)
+                    if (!isIntentionalStopRef.current && !isSavingRef.current && user && latestTranscriptionLogRef.current.length > 0 && sessionStartTimeRef.current > 0) {
+                        glossosLog('Abnormal disconnect — saving session from onClose');
+                        isSavingRef.current = true;
+                        const duration = Math.floor((Date.now() - sessionStartTimeRef.current) / 1000);
+                        saveSession(latestTranscriptionLogRef.current, selectedLanguage, duration)
+                            .catch(glossosError)
+                            .finally(() => { isSavingRef.current = false; });
+                    } else {
+                        glossosLog(`onClose: skipping save (intentional=${isIntentionalStopRef.current}, saving=${isSavingRef.current})`);
+                    }
+
+                    setConnectionState('DISCONNECTED');
+                    cleanupResources();
+                    setSessionStartTime(0);
+                    sessionStartTimeRef.current = 0;
+                    reconnectAttemptsRef.current = 0;
+                },
+            });
+
             sessionPromiseRef.current = startLiveSession({
                 onOpen: () => {
                     addDebugLog('WebSocket OPEN');
-                    console.log('[GLOSSOS] ✅ WebSocket onOpen fired');
-                    console.log('[GLOSSOS] Input AudioContext state:', inputAudioContextRef.current?.state);
-                    console.log('[GLOSSOS] Output AudioContext state:', outputAudioContextRef.current?.state);
+                    glossosLog('WebSocket onOpen fired');
+                    glossosLog('Input AudioContext state:', inputAudioContextRef.current?.state);
+                    glossosLog('Output AudioContext state:', outputAudioContextRef.current?.state);
                     setConnectionState('CONNECTED');
+                    reconnectAttemptsRef.current = 0;
+
+                    // ─── MOBILE RESILIENCE: Start keepalive (deduplicated via hook) ───
+                    startKeepalive();
+
                     // Set a timeout — if no AI response within 15s of CONNECTED, show a hint
                     connectionTimeoutRef.current = setTimeout(() => {
-                        if (transcriptionLog.length === 0) {
+                        if (latestTranscriptionLogRef.current.length === 0) {
                             setError('No response from the AI tutor yet. Try speaking louder or check your microphone. The AI should respond within a few seconds.');
                         }
                         connectionTimeoutRef.current = null;
-                    }, 15000);
-
-                    // Initialize Speech Recognition for User Transcription
-                    try {
-                        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                        if (SpeechRecognition) {
-                            recognitionRef.current = new SpeechRecognition();
-                            recognitionRef.current.continuous = true;
-                            recognitionRef.current.interimResults = true;
-                            
-                            const langMap: Record<string, string> = {
-                                'English': 'en-US', 'Spanish': 'es-ES', 'French': 'fr-FR', 'German': 'de-DE', 
-                                'Italian': 'it-IT', 'Japanese': 'ja-JP', 'Portuguese': 'pt-BR', 
-                                'Korean': 'ko-KR', 'Chinese': 'zh-CN', 'Russian': 'ru-RU', 'Slovak': 'sk-SK', 
-                                'Yucatec Mayan': 'es-MX'
-                            };
-                            recognitionRef.current.lang = langMap[selectedLanguage] || 'en-US';
-
-                            recognitionRef.current.onresult = (event: any) => {
-                                let interim = '';
-                                let isFinal = false;
-                                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                                    if (event.results[i].isFinal) {
-                                        interim += event.results[i][0].transcript;
-                                        isFinal = true;
-                                    } else {
-                                        interim += event.results[i][0].transcript;
-                                    }
-                                }
-
-                                if (!interim) return;
-
-                                setTranscriptionLog(prev => {
-                                    const existingIndex = prev.findIndex(e => e.id === currentInputTranscriptionRef.current.id);
-                                    if (existingIndex === -1) {
-                                        const newId = Date.now();
-                                        currentInputTranscriptionRef.current = { id: newId, text: interim };
-                                        return [...prev, { id: newId, speaker: 'You', text: interim, isFinal: false }];
-                                    } else {
-                                        const newLog = [...prev];
-                                        newLog[existingIndex] = { ...newLog[existingIndex], text: interim, isFinal };
-                                        currentInputTranscriptionRef.current.text = interim;
-                                        if (isFinal) {
-                                            currentInputTranscriptionRef.current = { id: -1, text: '' };
-                                        }
-                                        return newLog;
-                                    }
-                                });
-                            };
-
-                            recognitionRef.current.onend = () => {
-                                // Restart if it stops abruptly but we are still connected
-                                if (sessionPromiseRef.current) {
-                                    try { recognitionRef.current?.start(); } catch(e) {}
-                                }
-                            };
-
-                            recognitionRef.current.start();
-                        }
-                    } catch (err) {
-                        console.warn('SpeechRecognition not supported or failed to start:', err);
-                    }
+                    }, CONNECTION_TIMEOUT_MS);
                 },
                 onMessage: handleMessage,
                 onError: (e: ErrorEvent) => {
                     addDebugLog(`Socket Error: ${e.message}`);
-                    console.error('Session error:', e);
+                    glossosError('Session error:', e);
                     const errorMsg = e.message || 'Unknown connection error';
                     if (errorMsg.includes('API key') || errorMsg.includes('401') || errorMsg.includes('403')) {
                         setError('Invalid API Key or authorization error. Please check your credentials.');
@@ -664,17 +820,8 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                     setConnectionState('ERROR');
                     cleanupResources();
                 },
-                onClose: (event: CloseEvent) => {
-                    addDebugLog(`Socket Closed: ${event.code}`);
-                    console.log('Session closed:', event);
-                    if (event.code !== 1000) {
-                        // Only show error for abnormal closures
-                        // setError(`Connection closed unexpectedly (code: ${event.code})`); 
-                    }
-                    setConnectionState('DISCONNECTED');
-                    cleanupResources();
-                },
-            }, selectedLanguage, userContext, proficiencyLevel, nativeLanguage, selectedVoice);
+                onClose: handleWsClose,
+            }, selectedLanguage, userContext, proficiencyLevel, nativeLanguage, selectedVoice, tools);
 
             // Handle session promise for audio sending
             sessionPromiseRef.current.then(() => {
@@ -684,7 +831,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
             });
 
         } catch (err) {
-            console.error('Failed to start session:', err);
+            glossosError('Failed to start session:', err);
             addDebugLog(`Start Error: ${(err as Error).message}`);
             const message = err instanceof Error ? err.message : 'An unknown error occurred.';
             setError(`Failed to start conversation. ${message}`);
@@ -724,15 +871,15 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
     const isConversationActive = connectionState === 'CONNECTED' || connectionState === 'CONNECTING';
 
-    // Toggle vision mode (must be after isConversationActive)
-    const toggleVisionMode = useCallback(() => {
-        if (isConversationActive) {
+    // Switch modes (must be after isConversationActive)
+    const switchMode = useCallback((next: AppMode) => {
+        if (isConversationActive && next !== 'voice') {
             setError('Stop the conversation before switching modes');
             return;
         }
-        setIsVisionMode(!isVisionMode);
+        setMode(next);
         setError(null);
-    }, [isConversationActive, isVisionMode]);
+    }, [isConversationActive]);
 
     return (
         <div className={`relative flex flex-col h-full w-full mx-auto animate-fade-in ${LEVEL_THEMES[proficiencyLevel] || ''}`}>
@@ -757,28 +904,42 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
 
                         {/* Mode Toggles */}
                         <div className="flex items-center gap-1.5">
-                            {/* Vision Mode Toggle */}
+                            {/* Mode bar */}
+                            <div className="flex items-center gap-0.5 rounded-full bg-black/20 border border-white/[0.06] p-0.5" role="tablist" aria-label="Mode">
+                                {MODES.map(m => (
+                                    <button
+                                        key={m.id}
+                                        role="tab"
+                                        aria-selected={mode === m.id}
+                                        onClick={() => switchMode(m.id)}
+                                        disabled={isConversationActive && m.id !== 'voice'}
+                                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full transition-all text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed ${mode === m.id
+                                            ? 'bg-[#FFBF00]/15 text-[#FFBF00] border border-[#FFBF00]/30'
+                                            : 'text-slate-500 border border-transparent hover:text-slate-300'
+                                            }`}
+                                        title={m.title}
+                                        style={{ fontFamily: "'IBM Plex Mono', monospace" }}
+                                    >
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={MODE_ICONS[m.id]} />
+                                        </svg>
+                                        <span className={mode === m.id ? 'inline' : 'hidden lg:inline'}>{m.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Tutor Skills */}
                             <button
-                                onClick={toggleVisionMode}
-                                disabled={isConversationActive}
-                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-semibold disabled:opacity-30 disabled:cursor-not-allowed ${isVisionMode
-                                    ? 'bg-[#FFBF00]/15 text-[#FFBF00] border border-[#FFBF00]/30 shadow-lg shadow-[#FFBF00]/10'
-                                    : 'bg-white/[0.04] text-slate-500 border border-white/[0.06] hover:bg-white/[0.08] hover:text-slate-300'
-                                    }`}
-                                title={isVisionMode ? 'Switch to Voice Mode' : 'Switch to Vision Mode'}
+                                onClick={() => setShowSkills(true)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all text-xs font-semibold bg-white/[0.04] text-slate-400 border border-white/[0.06] hover:bg-white/[0.08] hover:text-slate-200"
+                                title="Tutor skills: what your voice tutor can do while you talk"
                                 style={{ fontFamily: "'IBM Plex Mono', monospace" }}
                             >
-                                {isVisionMode ? (
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                                    </svg>
-                                ) : (
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                                    </svg>
-                                )}
-                                <span className="hidden sm:inline">{isVisionMode ? 'Vision' : 'Voice'}</span>
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437" />
+                                </svg>
+                                <span className="hidden sm:inline">Skills</span>
+                                <span className="text-[10px] text-[#00FF41]">{enabledSkills(skillPrefs).length}</span>
                             </button>
 
                             {/* Scene Images Toggle */}
@@ -887,7 +1048,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 )}
 
                 {/* Main Content Area */}
-                {!isVisionMode ? (
+                {isVoiceMode ? (
                     /* Voice Mode - Chat Log Area */
                     <div
                         ref={logContainerRef}
@@ -903,7 +1064,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                             <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#FFBF00]/10 to-[#00FF41]/10 animate-breathe" />
                                         </div>
                                     }>
-                                        <GlossosOrb connectionState={connectionState} volume={volume} />
+                                        <GlossosOrb connectionState={connectionState} volume={volume} aiAnalyser={outputAnalyserRef.current} />
                                     </Suspense>
                                 </div>
 
@@ -980,7 +1141,11 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         )}
 
                         {/* Chat Messages */}
-                        {transcriptionLog.map(entry => (
+                        {transcriptionLog.map(entry => entry.attachment ? (
+                            <div key={entry.id} className="w-full flex justify-start animate-slide-up">
+                                <SkillAttachmentView attachment={entry.attachment} learnLanguage={selectedLanguage} />
+                            </div>
+                        ) : (
                             <div key={entry.id} className="w-full space-y-3 animate-slide-up">
                                 <div className={`flex flex-col ${entry.speaker === 'You' ? 'items-end' : 'items-start'}`}>
                                     <div className={`max-w-[88%] sm:max-w-[80%] md:max-w-[75%] relative`}>
@@ -1033,7 +1198,17 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                                                         <>
                                                             <div className="w-px h-3 bg-white/10"></div>
                                                             <button
-                                                                onClick={() => new Audio(entry.audioUrl).play()}
+                                                                onClick={() => {
+                                                                    // Stop any currently playing audio before starting new one
+                                                                    if (playbackAudioRef.current) {
+                                                                        playbackAudioRef.current.pause();
+                                                                        playbackAudioRef.current.currentTime = 0;
+                                                                    }
+                                                                    const audio = new Audio(entry.audioUrl);
+                                                                    playbackAudioRef.current = audio;
+                                                                    audio.onended = () => { playbackAudioRef.current = null; };
+                                                                    audio.play().catch(console.error);
+                                                                }}
                                                                 className="p-1 hover:bg-white/10 rounded-full transition-colors group/btn"
                                                                 aria-label="Replay your audio"
                                                             >
@@ -1065,67 +1240,27 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         ))}
                     </div>
                 ) : (
-                    /* Vision Mode - Vocabulary Collection */
-                    <div className="flex-grow overflow-y-auto p-6 md:p-8">
-                        {isAnalyzingImage && (
-                            <div className="flex items-center justify-center py-12">
-                                <div className="text-center">
-                                    <div className="w-16 h-16 mx-auto mb-4 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
-                                    <p className="text-white font-semibold">Analyzing image...</p>
-                                    <p className="text-slate-400 text-sm mt-1">Creating vocabulary card</p>
-                                </div>
+                    /* Other modes: Lens, Chat, Writing Lab, Offline models */
+                    <div className="flex-grow min-h-0 flex flex-col">
+                        <Suspense fallback={
+                            <div className="flex-grow flex items-center justify-center">
+                                <div className="w-12 h-12 rounded-full border-2 border-[#FFBF00]/20 border-t-[#FFBF00] animate-spin" />
                             </div>
-                        )}
-
-                        {!isAnalyzingImage && vocabularyCards.length === 0 && (
-                            <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                                <div className="relative animate-float mb-8">
-                                    <div className="absolute -inset-6 bg-purple-500/10 rounded-full blur-2xl"></div>
-                                    <div className="w-28 h-28 rounded-full bg-gradient-to-br from-purple-500/15 to-blue-500/15 border border-purple-500/20 flex items-center justify-center overflow-hidden">
-                                        <svg className="w-14 h-14 text-purple-400/60 relative z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                                        </svg>
-                                    </div>
+                        }>
+                            {mode === 'lens' && <LensTeacher nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} />}
+                            {mode === 'chat' && <ChatTutor nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} onManageModels={() => switchMode('offline')} />}
+                            {mode === 'lab' && (
+                                <div className="flex-grow min-h-0 overflow-y-auto">
+                                    <WritingLab nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} onManageModels={() => switchMode('offline')} />
                                 </div>
-                                <h2 className="text-white text-xl font-bold mb-2">No Vocabulary Cards Yet</h2>
-                                <p className="text-slate-500 text-sm mb-6 max-w-sm">Point your camera at objects to learn new words in your target language</p>
-                                <button
-                                    onClick={() => setShowCamera(true)}
-                                    className="px-6 py-3 bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600 text-white font-semibold rounded-xl transition-all shadow-lg shadow-purple-500/20 hover:shadow-purple-500/30 flex items-center gap-2"
-                                >
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                                    </svg>
-                                    Capture Object
-                                </button>
-                            </div>
-                        )}
-
-                        {vocabularyCards.length > 0 && (
-                            <div>
-                                <div className="flex items-center justify-between mb-6">
-                                    <h3 className="text-white font-bold text-lg">
-                                        Vocabulary Collection ({vocabularyCards.length})
-                                    </h3>
-                                    <button
-                                        onClick={() => setShowCamera(true)}
-                                        className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/30 rounded-lg transition-colors flex items-center gap-2 text-sm font-semibold"
-                                    >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                                        </svg>
-                                        Add Card
-                                    </button>
+                            )}
+                            {mode === 'scribe' && (
+                                <div className="flex-grow min-h-0 overflow-y-auto">
+                                    <AudioScribe nativeLanguage={nativeLanguage} learnLanguage={selectedLanguage} level={proficiencyLevel} />
                                 </div>
-                                <VocabularyCollection
-                                    cards={vocabularyCards}
-                                    onPracticeCard={handlePracticeCard}
-                                    onDeleteCard={handleDeleteCard}
-                                />
-                            </div>
-                        )}
+                            )}
+                            {mode === 'offline' && <OfflinePanel />}
+                        </Suspense>
                     </div>
                 )}
 
@@ -1140,6 +1275,7 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                 {/* ============================================
                     BOTTOM CONTROL CENTER — Premium Mic Button & Help
                     ============================================ */}
+                {isVoiceMode && (
                 <div className="px-6 py-4 border-t border-white/[0.04] flex flex-col items-center justify-center relative overflow-hidden">
 
 
@@ -1291,19 +1427,22 @@ const Conversation: React.FC<ConversationProps> = ({ defaultNativeLanguage, defa
                         }
                     </p>
                 </div>
+                )}
             </div>
+
+            {/* Tutor Skills panel */}
+            {showSkills && (
+                <SkillsPanel
+                    prefs={skillPrefs}
+                    locked={isConversationActive}
+                    onChange={prefs => { setSkillPrefs(prefs); saveSkillPrefs(prefs); }}
+                    onClose={() => setShowSkills(false)}
+                />
+            )}
 
             {/* Auth Modal */}
             {showAuthModal && <AuthModal onClose={() => setShowAuthModal(false)} />}
 
-            {/* Camera Capture Modal (Phase 5) */}
-            {showCamera && (
-                <CameraCapture
-                    isActive={showCamera}
-                    onCapture={handleCameraCapture}
-                    onClose={() => setShowCamera(false)}
-                />
-            )}
         </div>
     );
 };

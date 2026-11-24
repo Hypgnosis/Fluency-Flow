@@ -45,14 +45,16 @@ export async function saveSession(
     duration: number
 ): Promise<string | null> {
     if (!auth || !db) {
-        console.warn('Firebase not configured, session not saved');
+        console.warn('[GLOSSOS-DB] Firebase not configured, session not saved');
         return null;
     }
     const userId = auth.currentUser?.uid;
     if (!userId) {
-        console.warn('No authenticated user, session not saved');
+        console.warn('[GLOSSOS-DB] No authenticated user, session not saved');
         return null;
     }
+
+    console.log(`[GLOSSOS-DB] Saving session: ${transcriptions.length} entries, ${duration}s, language=${language}`);
 
     try {
         // Calculate average pronunciation score
@@ -64,6 +66,18 @@ export async function saveSession(
             ? scoresWithValues.reduce((sum, t) => sum + (t.pronunciationScore || 0), 0) / scoresWithValues.length
             : 0;
 
+        // Strip non-serializable, oversized, and undefined fields from transcriptions.
+        // Firestore rejects ANY field with value `undefined`.
+        // - audioUrl: blob URLs are not valid after page unload
+        // - phoneticAnalysis: deeply nested non-serializable object
+        // - sceneImageUrl: base64 data URLs can exceed Firestore's 1 MiB doc limit
+        // - isGeneratingImage: transient UI state
+        const cleanTranscriptions = transcriptions.map(t => {
+            const { audioUrl, phoneticAnalysis, sceneImageUrl, isGeneratingImage, ...rest } = t as any;
+            // JSON round-trip strips all `undefined` values (Firestore requirement)
+            return JSON.parse(JSON.stringify(rest));
+        });
+
         const sessionData: SessionData = {
             timestamp: Timestamp.now(),
             language,
@@ -71,24 +85,24 @@ export async function saveSession(
             transcriptionSummary: transcriptions
                 .map(t => `${t.speaker}: ${t.text}`)
                 .join('\n'),
-            transcriptions: transcriptions.map(t => ({
-                ...t,
-                audioUrl: undefined // Don't save blob URLs to Firestore
-            })),
+            transcriptions: cleanTranscriptions,
             averagePronunciationScore: avgScore,
             totalUtterances: transcriptions.filter(t => t.speaker === 'You').length
         };
+
+        console.log(`[GLOSSOS-DB] Document payload size: ~${JSON.stringify(sessionData).length} bytes`);
 
         const docRef = await addDoc(
             collection(db, `users/${userId}/sessions`),
             sessionData
         );
 
-        console.log('Session saved:', docRef.id);
+        console.log(`[GLOSSOS-DB] [OK] Session saved: ${docRef.id}`);
         return docRef.id;
     } catch (error) {
-        console.error('Error saving session:', error);
-        return null;
+        console.error('[GLOSSOS-DB] [ERROR] Error saving session:', error);
+        // Re-throw so the caller can surface the error to the user
+        throw error;
     }
 }
 
@@ -116,7 +130,7 @@ export async function loadRecentSessions(
 }
 
 /**
- * Logs a mistake made by the user
+ * Logs a mistake made by the user. Resolves to true when it was written.
  */
 export async function logMistake(
     word: string,
@@ -124,10 +138,10 @@ export async function logMistake(
     correctForm: string,
     category: MistakeData['category'],
     language: string
-): Promise<void> {
-    if (!auth || !db) return;
+): Promise<boolean> {
+    if (!auth || !db) return false;
     const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    if (!userId) return false;
 
     try {
         // Check if this mistake already exists
@@ -160,8 +174,34 @@ export async function logMistake(
                 language
             });
         }
+        return true;
     } catch (error) {
         console.error('Error logging mistake:', error);
+        return false;
+    }
+}
+
+/**
+ * Marks the unresolved mistakes with this incorrect form as resolved (used by the tutor's
+ * mark_mistake_fixed skill). Resolves to true when at least one was found.
+ */
+export async function resolveMistakeByForm(incorrectForm: string, language: string): Promise<boolean> {
+    if (!auth || !db) return false;
+    const userId = auth.currentUser?.uid;
+    if (!userId) return false;
+
+    try {
+        const matches = await getDocs(query(
+            collection(db, `users/${userId}/mistakes`),
+            where('incorrectForm', '==', incorrectForm),
+            where('language', '==', language),
+            where('resolved', '==', false)
+        ));
+        await Promise.all(matches.docs.map(d => updateDoc(d.ref, { resolved: true })));
+        return !matches.empty;
+    } catch (error) {
+        console.error('Error resolving mistake:', error);
+        return false;
     }
 }
 
@@ -171,20 +211,37 @@ export async function logMistake(
 export async function loadUserContext(userId: string): Promise<string> {
     if (!db) return '';
     try {
-        // Fetch unresolved mistakes
-        const mistakesQuery = query(
-            collection(db, `users/${userId}/mistakes`),
-            where('resolved', '==', false),
-            orderBy('timesRepeated', 'desc'),
-            limit(10)
-        );
+        console.log(`[GLOSSOS-DB] Loading user context for ${userId}`);
 
-        const mistakesSnapshot = await getDocs(mistakesQuery);
+        let mistakesSnapshot;
+        try {
+            // Primary query: requires composite index (resolved + timesRepeated)
+            const mistakesQuery = query(
+                collection(db, `users/${userId}/mistakes`),
+                where('resolved', '==', false),
+                orderBy('timesRepeated', 'desc'),
+                limit(10)
+            );
+            mistakesSnapshot = await getDocs(mistakesQuery);
+        } catch (indexError: any) {
+            // Fallback: if composite index is missing, query without orderBy
+            console.warn('[GLOSSOS-DB] Composite index missing, falling back to unordered query:', indexError?.message);
+            const fallbackQuery = query(
+                collection(db, `users/${userId}/mistakes`),
+                where('resolved', '==', false),
+                limit(10)
+            );
+            mistakesSnapshot = await getDocs(fallbackQuery);
+        }
+
         const mistakes = mistakesSnapshot.docs.map(doc => doc.data() as MistakeData);
 
         if (mistakes.length === 0) {
+            console.log('[GLOSSOS-DB] No unresolved mistakes found');
             return '';
         }
+
+        console.log(`[GLOSSOS-DB] Loaded ${mistakes.length} unresolved mistakes`);
 
         // Format context string
         const mistakesList = mistakes
@@ -198,9 +255,16 @@ ${mistakesList}
 Please adapt your teaching to address these recurring mistakes naturally during conversation.
     `.trim();
     } catch (error) {
-        console.error('Error loading user context:', error);
+        console.error('[GLOSSOS-DB] Error loading user context:', error);
         return '';
     }
+}
+
+/**
+ * Reads the mistakes back out of the LEARNER PROFILE text built by loadUserContext().
+ */
+export function parseProfileMistakes(context: string): { incorrect: string; correct: string }[] {
+    return [...context.matchAll(/^- "(.+?)" → "(.+?)" \(/gm)].map(m => ({ incorrect: m[1], correct: m[2] }));
 }
 
 /**
@@ -232,13 +296,23 @@ export async function getUserStats(userId: string) {
         unresolvedMistakes: 0
     };
     try {
-        const [sessionsSnapshot, mistakesSnapshot] = await Promise.all([
-            getDocs(collection(db, `users/${userId}/sessions`)),
-            getDocs(query(
+        const sessionsSnapshot = await getDocs(collection(db, `users/${userId}/sessions`));
+
+        // Mistakes query may fail if composite index doesn't exist yet
+        let unresolvedCount = 0;
+        try {
+            const mistakesSnapshot = await getDocs(query(
                 collection(db, `users/${userId}/mistakes`),
                 where('resolved', '==', false)
-            ))
-        ]);
+            ));
+            unresolvedCount = mistakesSnapshot.size;
+        } catch (mistakeErr: any) {
+            if (mistakeErr?.code === 'failed-precondition') {
+                console.warn('[GLOSSOS-DB] Mistakes index not yet created, defaulting to 0');
+            } else {
+                console.error('[GLOSSOS-DB] Error querying mistakes:', mistakeErr);
+            }
+        }
 
         const sessions = sessionsSnapshot.docs.map(doc => doc.data() as SessionData);
         const totalMinutes = sessions.reduce((sum, s) => sum + s.duration, 0) / 60;
@@ -250,10 +324,10 @@ export async function getUserStats(userId: string) {
             totalSessions: sessions.length,
             totalMinutes: Math.round(totalMinutes),
             averagePronunciationScore: Math.round(avgScore * 100) / 100,
-            unresolvedMistakes: mistakesSnapshot.size
+            unresolvedMistakes: unresolvedCount
         };
     } catch (error) {
-        console.error('Error getting stats:', error);
+        console.error('[GLOSSOS-DB] Error getting stats:', error);
         return {
             totalSessions: 0,
             totalMinutes: 0,

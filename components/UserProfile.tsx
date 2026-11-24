@@ -15,27 +15,29 @@ export const UserProfile: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (user) {
-            loadStats();
-        }
+        const loadStats = async () => {
+            if (!user) return;
+            setLoading(true);
+            try {
+                const userStats = await getUserStats(user.uid);
+                setStats(userStats);
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        loadStats();
     }, [user]);
 
-    const loadStats = async () => {
-        if (!user) return;
-        setLoading(true);
-        try {
-            const userStats = await getUserStats(user.uid);
-            setStats(userStats);
-        } catch (error) {
-            console.error('Error loading stats:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-
     const handleLogout = async () => {
-        await logout();
-        onClose();
+        try {
+            await logout();
+        } catch (error) {
+            console.error('[GLOSSOS] Logout error:', error);
+        } finally {
+            onClose();
+        }
     };
 
     return (

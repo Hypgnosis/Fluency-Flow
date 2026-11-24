@@ -9,6 +9,7 @@ export interface TranscriptionEntry {
   timestamp?: number;
   sceneImageUrl?: string;          // Nano Banana Pro generated scene image
   isGeneratingImage?: boolean;      // Loading state for image generation
+  attachment?: import('./services/tutorSkills/types').SkillAttachment; // Shown by a Tutor Skill
 }
 
 // Re-export phonetic types
