@@ -35,6 +35,13 @@ export function localeFor(name: string): string {
     return getLanguageInfo(name).locale;
 }
 
+/** English name of the language a locale belongs to ("es-MX" -> "Spanish"), if Glossos knows it. */
+export function languageNameForLocale(locale: string): string | undefined {
+    const code = locale.toLowerCase().split(/[-_]/)[0];
+    const key = Object.keys(LANGUAGE_INFO).find(k => LANGUAGE_INFO[k].code === code);
+    return key?.replace(/\b\w/g, c => c.toUpperCase());
+}
+
 export function languageCode(name: string): string {
     return getLanguageInfo(name).code;
 }

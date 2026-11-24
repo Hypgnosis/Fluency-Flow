@@ -5,6 +5,9 @@
  * spoken with a native-language voice and <target> spans with a target-language voice.
  */
 
+import { naturalVoice } from './naturalVoice';
+import { languageNameForLocale } from './languages';
+
 export interface SpeechSegment {
     text: string;
     locale: string;
@@ -17,7 +20,7 @@ function synth(): SpeechSynthesis | null {
 }
 
 export function isTtsSupported(): boolean {
-    return synth() !== null;
+    return synth() !== null || naturalVoice.available();
 }
 
 let cachedVoices: SpeechSynthesisVoice[] = [];
@@ -55,9 +58,23 @@ export function setSpeechRate(rate: number) {
 }
 
 /**
- * Queues segments to speak in order. Resolves when the last one ends (or speech is cancelled).
+ * Speaks segments in order. Resolves when the last one ends (or speech is cancelled).
+ * Uses the natural Gemini voice when it is on (one voice, native pronunciation in every language)
+ * and the browser's voices otherwise or if the natural voice cannot start.
  */
 export function speakSegments(segments: SpeechSegment[]): Promise<void> {
+    if (naturalVoice.available()) {
+        const spoken = segments.filter(s => s.text.trim());
+        const text = spoken.map(s => s.text.trim()).join(' ');
+        const locales = new Set(spoken.map(s => s.locale.toLowerCase().split(/[-_]/)[0]));
+        const language = locales.size === 1 ? languageNameForLocale(spoken[0].locale) : undefined;
+        return naturalVoice.say(text, language).catch(() => browserSpeakSegments(segments));
+    }
+    return browserSpeakSegments(segments);
+}
+
+/** The browser's built-in voices: one voice per language, switching at each segment. */
+function browserSpeakSegments(segments: SpeechSegment[]): Promise<void> {
     const s = synth();
     const items = segments.filter(seg => seg.text.trim());
     if (!s || items.length === 0) return Promise.resolve();
@@ -84,11 +101,12 @@ export function speak(text: string, locale: string): Promise<void> {
 }
 
 export function stopSpeaking() {
+    naturalVoice.stop();
     synth()?.cancel();
 }
 
 export function isSpeaking(): boolean {
-    return synth()?.speaking ?? false;
+    return naturalVoice.isSpeaking() || (synth()?.speaking ?? false);
 }
 
 // ─── Dictation ─────────────────────────────────────────────────────────────

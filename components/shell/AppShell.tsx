@@ -10,6 +10,7 @@ import { SettingsSheet } from './SettingsSheet';
 import { NAV, PRIMARY_NAV, isAppMode, navItem, type AppMode } from './nav';
 import Conversation from '../Conversation';
 import { ShellCtx, type ShellApi } from './shellContext';
+import { naturalVoice } from '../../services/naturalVoice';
 
 export { useShell } from './shellContext';
 
@@ -100,6 +101,11 @@ export const AppShell: React.FC = () => {
     }, [voiceActive, flash]);
 
     const api = useMemo<ShellApi>(() => ({ navigate, openSettings: () => setSettingsOpen(true), setVoiceActive }), [navigate]);
+
+    // Lens, Chat read-aloud and word buttons speak with the tutor's natural Gemini voice.
+    useEffect(() => { naturalVoice.configure({ enabled: true, voice: settings.voice }); }, [settings.voice]);
+    useEffect(() => () => naturalVoice.configure({ enabled: false }), []);
+    useEffect(() => { if (mode === 'lens') naturalVoice.warmUp(); }, [mode]);
     const page = navItem(mode);
     const { nativeLanguage, learnLanguage, level } = settings;
 
