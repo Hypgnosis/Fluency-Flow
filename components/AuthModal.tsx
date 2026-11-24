@@ -15,20 +15,34 @@ import { auth, isFirebaseConfigured } from '../services/firebase';
 interface AuthContextType {
     user: User | null;
     loading: boolean;
-    signInWithGoogle: () => Promise<void>;
-    signInAsGuest: () => Promise<void>;
+    /** Resolve to the signed-in user's id. */
+    signInWithGoogle: () => Promise<string | undefined>;
+    signInAsGuest: () => Promise<string | undefined>;
     logout: () => Promise<void>;
 }
 
 const AuthContext = React.createContext<AuthContextType>({
     user: null,
     loading: true,
-    signInWithGoogle: async () => { },
-    signInAsGuest: async () => { },
+    signInWithGoogle: async () => undefined,
+    signInAsGuest: async () => undefined,
     logout: async () => { }
 });
 
 export const useAuth = () => React.useContext(AuthContext);
+
+/**
+ * Google's Gemini API terms require users to be 18 or older. The sign-in card asks for that, and
+ * remembers which account confirmed it, so the app can record it on the account right after.
+ */
+const ADULT_KEY = 'glossos_adult_uid';
+export function rememberAdult(uid: string | undefined) {
+    if (!uid) return;
+    try { localStorage.setItem(ADULT_KEY, uid); } catch { /* storage unavailable */ }
+}
+export function confirmedAdultHere(uid: string | undefined): boolean {
+    try { return !!uid && localStorage.getItem(ADULT_KEY) === uid; } catch { return false; }
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [user, setUser] = useState<User | null>(null);
@@ -74,7 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         try {
             const provider = new GoogleAuthProvider();
-            await signInWithPopup(auth, provider);
+            return (await signInWithPopup(auth, provider)).user.uid;
         } catch (error) {
             console.error('Error signing in with Google:', error);
             throw error;
@@ -86,7 +100,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             throw new Error('Firebase is not configured. Please set FIREBASE_* environment variables.');
         }
         try {
-            await signInAnonymously(auth);
+            return (await signInAnonymously(auth)).user.uid;
         } catch (error) {
             console.error('Error signing in anonymously:', error);
             throw error;
@@ -121,12 +135,23 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [adult, setAdult] = useState(false);
+    const [ageMissing, setAgeMissing] = useState(false);
+
+    /** Every way in needs the 18+ box ticked first. */
+    const needsAge = () => {
+        if (adult) return false;
+        setAgeMissing(true);
+        setError('Please confirm you are 18 or older to continue.');
+        return true;
+    };
 
     const handleGoogleSignIn = async () => {
+        if (needsAge()) return;
         setLoading(true);
         setError(null);
         try {
-            await signInWithGoogle();
+            rememberAdult(await signInWithGoogle());
             onClose?.();
         } catch (err) {
             setError(describeAuthError(err, 'google'));
@@ -136,10 +161,11 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
     };
 
     const handleGuestSignIn = async () => {
+        if (needsAge()) return;
         setLoading(true);
         setError(null);
         try {
-            await signInAsGuest();
+            rememberAdult(await signInAsGuest());
             onClose?.();
         } catch (err) {
             setError(describeAuthError(err, 'guest'));
@@ -158,16 +184,16 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
             setError('Please enter both email and password.');
             return;
         }
-        
+        if (needsAge()) return;
+
         setLoading(true);
         setError(null);
-        
+
         try {
-            if (isRegistering) {
-                await createUserWithEmailAndPassword(auth, email, password);
-            } else {
-                await signInWithEmailAndPassword(auth, email, password);
-            }
+            const cred = isRegistering
+                ? await createUserWithEmailAndPassword(auth, email, password)
+                : await signInWithEmailAndPassword(auth, email, password);
+            rememberAdult(cred.user.uid);
             onClose?.();
         } catch (err: any) {
             console.error('Email auth error:', err);
@@ -202,6 +228,21 @@ export const AuthModal: React.FC<{ onClose?: () => void }> = ({ onClose }) => {
                             {error}
                         </div>
                     )}
+
+                    <label
+                        className={`mt-5 flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-3 text-sm leading-snug transition-colors ${ageMissing && !adult ? 'border-rose-400/40 bg-rose-500/[0.06]' : 'border-white/[0.08] bg-white/[0.025]'}`}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={adult}
+                            onChange={(e) => { setAdult(e.target.checked); if (e.target.checked) { setAgeMissing(false); setError(null); } }}
+                            className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[#FFBF00]"
+                        />
+                        <span className="text-slate-300">
+                            <span className="font-semibold text-white">I am 18 or older.</span>{' '}
+                            Glossos uses Google's Gemini AI, which is only for adults.
+                        </span>
+                    </label>
 
                     <button
                         onClick={handleGoogleSignIn}

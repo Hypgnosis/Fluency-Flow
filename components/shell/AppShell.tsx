@@ -4,7 +4,7 @@ import { Icon } from '../ui/Icon';
 import { Wordmark, LogoMark } from '../ui/Logo';
 import { IconButton, LangBadge, Spinner, cx } from '../ui/primitives';
 import { Avatar, ProfileSheet, userFirstName } from '../UserProfile';
-import { useAuth } from '../AuthModal';
+import { confirmedAdultHere, useAuth } from '../AuthModal';
 import { LEVELS, languageMeta, useLearningSettings } from './LearningSettings';
 import { SettingsSheet } from './SettingsSheet';
 import { NAV, PRIMARY_NAV, isAppMode, navItem, type AppMode } from './nav';
@@ -12,8 +12,9 @@ import Conversation from '../Conversation';
 import { ShellCtx, type ShellApi } from './shellContext';
 import { naturalVoice } from '../../services/naturalVoice';
 import { MinutesChip, PlansSheet } from '../billing/PlansSheet';
+import { AgeGate } from '../billing/AgeGate';
 import {
-    cachedBillingStatus, onBillingStatus, onPaywall, refreshBillingStatus,
+    cachedBillingStatus, confirmAdult, onAgeCheck, onBillingStatus, onPaywall, refreshBillingStatus,
     type BillingStatus, type PaywallRequest,
 } from '../../services/billing';
 import { PLANS } from '../../services/billing/plans';
@@ -50,6 +51,7 @@ const LanguageChip: React.FC<{ onClick: () => void; compact?: boolean }> = ({ on
             {!compact && (
                 <span className="flex items-center gap-1.5 whitespace-nowrap">
                     <span className="font-semibold text-white">{learn.native}</span>
+                    {learn.beta && <span className="rounded-full bg-gold-500/15 px-1.5 py-px text-[10px] font-bold uppercase tracking-wider text-gold-300">Beta</span>}
                     <span className="text-slate-500">·</span>
                     <span className="text-slate-400">{levelLabel}</span>
                 </span>
@@ -83,7 +85,7 @@ const PageFallback = () => (
 
 /** The signed-in app: sidebar on desktop, tab bar on phones, one page at a time. */
 export const AppShell: React.FC = () => {
-    const { user } = useAuth();
+    const { user, logout } = useAuth();
     const settings = useLearningSettings();
     const [mode, setMode] = useState<AppMode>(initialMode);
     const [voiceActive, setVoiceActive] = useState(false);
@@ -92,10 +94,10 @@ export const AppShell: React.FC = () => {
     const [notice, setNotice] = useState<string | null>(null);
     const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const flash = useCallback((text: string) => {
+    const flash = useCallback((text: string, ms = 2800) => {
         setNotice(text);
         if (noticeTimer.current) clearTimeout(noticeTimer.current);
-        noticeTimer.current = setTimeout(() => setNotice(null), 2800);
+        noticeTimer.current = setTimeout(() => setNotice(null), ms);
     }, []);
     useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
 
@@ -129,19 +131,33 @@ export const AppShell: React.FC = () => {
         params.delete('checkout');
         const query = params.toString();
         window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
-        if (result !== 'success') return;
-        flash('Payment received. Setting up your plan…');
+        if (result !== 'success' && result !== 'pass') return;
+        // Paying once with OXXO: the plan starts when the store payment is confirmed, not now.
+        flash(result === 'pass'
+            ? 'Thank you! Paid by card? Your plan starts in a moment. Paying at OXXO? It starts once OXXO confirms your payment, usually within a day.'
+            : 'Payment received. Setting up your plan…', result === 'pass' ? 9000 : 2800);
         let tries = 0;
         let timer: ReturnType<typeof setTimeout>;
         const check = async () => {
             const s = await refreshBillingStatus();
-            if (s && s.plan !== 'free') { flash(`Welcome to ${PLANS[s.plan].name}! Your minutes are ready.`); return; }
+            if (s && s.plan !== 'free') { flash(`Welcome to ${PLANS[s.plan].name}! Your minutes are ready.`, 4000); return; }
+            if (s?.upcoming) { flash(`Done. Your ${PLANS[s.upcoming.plan].name} subscription starts when your current plan ends.`, 5000); return; }
             if (++tries < 8) timer = setTimeout(check, 2000);
         };
         void check();
         return () => clearTimeout(timer);
     }, [flash]);
     const openPlans = useCallback(() => { setPaywall(null); setPlansOpen(true); }, []);
+
+    // ── 18+ check (Google's Gemini terms). Ticked at sign-in on this device? Save it silently. ──
+    const [ageOpen, setAgeOpen] = useState(false);
+    useEffect(() => onAgeCheck(() => setAgeOpen(true)), []);
+    const needsAge = billing?.adult === false;
+    useEffect(() => {
+        if (!needsAge) return;
+        if (confirmedAdultHere(user?.uid)) void confirmAdult().catch(() => setAgeOpen(true));
+        else setAgeOpen(true);
+    }, [needsAge, user?.uid]);
 
     // Lens, Chat read-aloud and word buttons speak with the tutor's natural Gemini voice.
     useEffect(() => { naturalVoice.configure({ enabled: true, voice: settings.voice }); }, [settings.voice]);
@@ -369,6 +385,7 @@ export const AppShell: React.FC = () => {
             <SettingsSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} locked={voiceActive} onOpenOffline={() => navigate('offline')} />
             <ProfileSheet open={profileOpen} onClose={() => setProfileOpen(false)} />
             <PlansSheet open={plansOpen} onClose={() => setPlansOpen(false)} status={billing} reason={paywall} />
+            <AgeGate open={ageOpen} onDone={() => setAgeOpen(false)} onSignOut={() => { setAgeOpen(false); void logout(); }} />
         </ShellCtx.Provider>
     );
 };

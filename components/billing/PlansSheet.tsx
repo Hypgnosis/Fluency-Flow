@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Badge, Button, Segmented, Sheet, Spinner, cx } from '../ui/primitives';
 import { Icon } from '../ui/Icon';
 import {
-    PLANS, PAID_PLANS, formatMinutes, monthlyEquivalent, type BillingInterval, type PaidPlanId,
+    PLANS, PAID_PLANS, PLAN_RANK, formatMinutes, monthlyEquivalent, type BillingInterval, type PaidPlanId,
 } from '../../services/billing/plans';
 import {
     openBillingPortal, refreshBillingStatus, startCheckout, type BillingStatus, type PaywallRequest,
@@ -16,6 +16,7 @@ const REASON_TITLE: Record<PaywallRequest['reason'], string> = {
     quota: 'You are out of AI minutes',
     daily: 'That is today\'s voice limit',
     paused: 'Glossos is busy right now',
+    full: 'Free practice is full this month',
     upgrade: 'Get more practice',
 };
 
@@ -47,7 +48,7 @@ export const MinutesMeter: React.FC<{ status: BillingStatus }> = ({ status }) =>
 interface Report {
     month: string;
     usdMxn: number;
-    thisMonth: { revenueGrossMxn: number; revenueNetMxn: number; totalUsd: number; freeUsd: number; paidUsd: number; ownerUsd: number };
+    thisMonth: { revenueGrossMxn: number; revenueNetMxn: number; totalUsd: number; freeUsd: number; paidUsd: number; ownerUsd: number; voiceLeasedUsd?: number };
     allTime: { revenueNetMxn: number; totalSpendUsd: number; estimatedProfitMxn: number };
     guard: { ceilingUsd: number };
 }
@@ -84,6 +85,8 @@ const OwnerReport: React.FC = () => {
             {row('  of it free users / you', `$${m.freeUsd.toFixed(2)} / $${m.ownerUsd.toFixed(2)}`, 'text-slate-300')}
             {row('Profit so far, all time (estimate)', `${mxn(report.allTime.estimatedProfitMxn)} MXN`, report.allTime.estimatedProfitMxn >= 0 ? 'text-mint-300' : 'text-rose-300')}
             {row('Gemini spend allowed so far', `$${report.guard.ceilingUsd.toFixed(2)} USD`, 'text-slate-300')}
+            {/* Far above the Gemini cost would mean someone is ending voice sessions early on purpose. */}
+            {row('Voice time handed out (if all used)', `$${(m.voiceLeasedUsd ?? 0).toFixed(2)} USD`, 'text-slate-300')}
         </div>
     );
 };
@@ -100,29 +103,29 @@ export const PlansSheet: React.FC<{
 
     useEffect(() => { if (open) { setError(''); void refreshBillingStatus(); } }, [open]);
 
-    const current = status?.subscription?.plan ?? null;
     const ready = !!status?.paymentsReady;
+    const sub = status?.subscription ?? null;
+    const pass = status?.pass ?? null;
+    const upcoming = status?.upcoming ?? null;
+    /** A subscription that charges the card again by itself: changes go through the Stripe portal. */
+    const renewing = (!!sub && !sub.cancelAtPeriodEnd) || !!upcoming;
+    const current: PaidPlanId | null = status && (status.plan === 'plus' || status.plan === 'pro') ? status.plan : null;
+    /** When what the user already paid for runs out (canceled subscription or pass). */
+    const paidUntil = current && !renewing ? Math.max(sub?.periodEnd ?? 0, pass?.periodEnd ?? 0) : 0;
+    const blocked = !ready || !!status?.guest || !!busy || !!status?.owner;
+    const length = interval === 'year' ? '1 year' : '1 month';
 
-    const choose = async (plan: PaidPlanId) => {
+    const run = async (key: string, action: () => Promise<void>) => {
         setError('');
-        setBusy(plan);
+        setBusy(key);
         try {
-            await startCheckout(plan, interval);
+            await action();
         } catch (e) {
             setError((e as Error).message);
             setBusy(null);
         }
     };
-    const manage = async () => {
-        setError('');
-        setBusy('portal');
-        try {
-            await openBillingPortal();
-        } catch (e) {
-            setError((e as Error).message);
-            setBusy(null);
-        }
-    };
+    const manage = () => run('portal', openBillingPortal);
 
     return (
         <Sheet
@@ -132,7 +135,7 @@ export const PlansSheet: React.FC<{
             subtitle="1 AI minute = 1 minute talking with your tutor"
             footer={
                 <p className="text-center text-[11px] leading-relaxed text-slate-500">
-                    Prices in Mexican pesos, IVA included. Cancel anytime. Payments are handled by Stripe; Glossos never sees your card.
+                    Prices in MXN, IVA included. Subscriptions renew until you cancel; paying once (card or OXXO) does not renew. Payments by Stripe: Glossos never sees your card.
                 </p>
             }
         >
@@ -150,8 +153,14 @@ export const PlansSheet: React.FC<{
                             <Badge tone={status.plan === 'free' ? 'slate' : 'gold'}>{PLANS[status.plan].name}</Badge>
                         </div>
                         <MinutesMeter status={status} />
-                        {status.subscription?.cancelAtPeriodEnd && (
-                            <p className="mt-3 text-xs text-slate-400">Your plan ends on {date(status.subscription.periodEnd)}.</p>
+                        {sub?.cancelAtPeriodEnd && !pass && (
+                            <p className="mt-3 text-xs text-slate-400">Your plan ends on {date(sub.periodEnd)}.</p>
+                        )}
+                        {pass && !sub && (
+                            <p className="mt-3 text-xs text-slate-400">Paid until {date(pass.periodEnd)}. It does not renew by itself.</p>
+                        )}
+                        {upcoming && (
+                            <p className="mt-3 text-xs text-slate-400">Your {PLANS[upcoming.plan].name} subscription starts on {date(upcoming.startsAt)}, when your current plan ends.</p>
                         )}
                     </div>
                 )}
@@ -176,8 +185,10 @@ export const PlansSheet: React.FC<{
                 <div className="space-y-3">
                     {PAID_PLANS.map(id => {
                         const plan = PLANS[id];
-                        const isCurrent = current === id;
+                        const isCurrent = current === id || upcoming?.plan === id;
                         const featured = id === 'plus';
+                        // Subscribing to a plan no better than the one already paid for starts charging when that ends.
+                        const startsLater = !!paidUntil && current !== null && PLAN_RANK[current] >= PLAN_RANK[id] && paidUntil - Date.now() > 49 * 3600 * 1000;
                         return (
                             <div
                                 key={id}
@@ -213,19 +224,44 @@ export const PlansSheet: React.FC<{
                                         </li>
                                     ))}
                                 </ul>
-                                <div className="mt-4">
-                                    {isCurrent ? (
-                                        <Button variant="secondary" className="w-full" loading={busy === 'portal'} onClick={manage}>Manage subscription</Button>
+                                <div className="mt-4 space-y-2">
+                                    {renewing ? (
+                                        isCurrent ? (
+                                            <Button variant="secondary" className="w-full" loading={busy === 'portal'} disabled={!!busy} onClick={manage}>Manage subscription</Button>
+                                        ) : (
+                                            <p className="rounded-xl bg-white/[0.04] p-3 text-xs leading-relaxed text-slate-400">
+                                                To switch to {plan.name}, cancel your current plan in Manage subscription. It keeps working until its end date, and then you can choose {plan.name} here.
+                                            </p>
+                                        )
                                     ) : (
-                                        <Button
-                                            variant={featured ? 'primary' : 'secondary'}
-                                            className="w-full"
-                                            disabled={!ready || !!status?.guest || !!busy || !!status?.owner}
-                                            loading={busy === id}
-                                            onClick={() => choose(id)}
-                                        >
-                                            {!ready ? 'Opening soon' : current ? `Switch to ${plan.name}` : `Choose ${plan.name}`}
-                                        </Button>
+                                        <>
+                                            <Button
+                                                variant={featured ? 'primary' : 'secondary'}
+                                                className="w-full"
+                                                disabled={blocked}
+                                                loading={busy === id}
+                                                onClick={() => run(id, () => startCheckout(id, interval))}
+                                            >
+                                                {!ready ? 'Opening soon' : isCurrent ? 'Renew automatically by card' : `Choose ${plan.name}`}
+                                            </Button>
+                                            {ready && startsLater && (
+                                                <p className="text-center text-[11px] text-slate-500">Your card is first charged on {date(paidUntil)}, when your current plan ends.</p>
+                                            )}
+                                            {ready && (
+                                                <button
+                                                    type="button"
+                                                    disabled={blocked}
+                                                    onClick={() => run(`${id}-once`, () => startCheckout(id, interval, true))}
+                                                    className="flex w-full items-center justify-center gap-1.5 rounded-xl py-2 text-sm font-semibold text-gold-300 transition-colors hover:bg-white/[0.04] hover:text-gold-200 disabled:opacity-40"
+                                                >
+                                                    {busy === `${id}-once` ? <Spinner /> : <Icon name="sparkles" size={14} />}
+                                                    {isCurrent ? `Add ${length} · card or OXXO` : `Pay once for ${length} · card or OXXO cash`}
+                                                </button>
+                                            )}
+                                            {ready && pass && !isCurrent && (
+                                                <p className="text-center text-[11px] text-slate-500">Paying once for {plan.name} starts today and replaces your {PLANS[pass.plan].name} time.</p>
+                                            )}
+                                        </>
                                     )}
                                 </div>
                             </div>
@@ -244,6 +280,7 @@ export const PlansSheet: React.FC<{
                     <p className="mb-1.5 font-semibold text-slate-300">How minutes work</p>
                     <p>Talk uses 1 minute per minute. Conversation Assist uses about half. Lens, Chat, Write and Scribe use a little: around 15 replies per minute. Offline chat runs on your phone and is always free.</p>
                     {status && status.plan === 'free' && <p className="mt-1.5">The free plan includes {PLANS.free.minutes} minutes every month.</p>}
+                    <p className="mt-1.5">Paying at OXXO: Stripe gives you a voucher to pay in cash at any OXXO store within 3 days. Your plan starts once OXXO confirms the payment, usually within a day.</p>
                 </div>
             </div>
         </Sheet>

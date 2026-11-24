@@ -853,6 +853,7 @@ const Conversation: React.FC = () => {
 
     const empty = transcriptionLog.length === 0;
     const learn = languageMeta(selectedLanguage);
+    const betaLanguage = [learn, languageMeta(nativeLanguage)].find(l => l.beta);
     const levelLabel = LEVELS.find(l => l.id === proficiencyLevel)?.label ?? proficiencyLevel;
     const skillNames = new Set(enabledSkills(skillPrefs).map(s => s.name));
     const perks = [
@@ -925,6 +926,15 @@ const Conversation: React.FC = () => {
                                         <p className="mt-3 text-[15px] leading-relaxed text-slate-400">
                                             Tap the microphone and just start speaking. Your tutor answers out loud, keeps it at your level and gently fixes mistakes.
                                         </p>
+                                        {betaLanguage && (
+                                            <p className="mx-auto mt-4 flex max-w-md items-start gap-2 rounded-2xl border border-gold-400/20 bg-gold-500/[0.06] px-3.5 py-2.5 text-left text-[13px] leading-snug text-gold-100">
+                                                <Icon name="help" size={15} className="mt-0.5 shrink-0 text-gold-400" />
+                                                <span>
+                                                    <span className="font-semibold">{betaLanguage.name} is in beta.</span>{' '}
+                                                    The tutor can make mistakes in it and may not understand spoken {betaLanguage.name} well yet. Check new phrases with a native speaker.
+                                                </span>
+                                            </p>
+                                        )}
                                         {perks.length > 0 && (
                                             <div className="mt-5 flex flex-wrap justify-center gap-2">
                                                 {perks.map((perk, i) => (

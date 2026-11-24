@@ -10,11 +10,19 @@
  *   outlive what the user has left. When the session ends the unused part is given back.
  * - The global guard refuses non-owner AI when estimated spend would pass
  *   `floatUsd + net revenue x maxSpendShare`, and caps free-plan spend per month.
+ * - A client could lie about when a voice session ended. Free voice time handed out (before any
+ *   refunds) is therefore capped too, so free accounts can never cost more than a fixed amount.
+ *
+ * A user's plan can come from a Stripe subscription (renews by card) or a pass (paid once by
+ * card or cash at OXXO, for a month or a year). If several are live, the best plan wins.
+ *
+ * Google's Gemini API terms require users to be 18 or older, so AI stays off until the account
+ * has confirmed its age once.
  */
 
 import {
-    PLANS, MINUTE_USD, DEFAULT_USD_MXN, liveCostPerSecond, netRevenueMxn,
-    type PlanId, type PaidPlanId, type BillingInterval, type LivePurpose,
+    PLANS, PLAN_RANK, MINUTE_USD, DEFAULT_USD_MXN, liveCostPerSecond, netRevenueMxn,
+    type PlanId, type PaidPlanId, type BillingInterval, type LivePurpose, type PaymentMethod,
 } from '../../../services/billing/plans.ts';
 import { update, ConflictError, type VersionedStore } from './store.ts';
 
@@ -36,6 +44,28 @@ export interface Subscription {
     subscriptionId?: string;
 }
 
+/** A plan paid once (card or OXXO) for a month or a year. It does not renew. */
+export interface Pass {
+    plan: PaidPlanId;
+    interval: BillingInterval;
+    periodStart: number;
+    periodEnd: number;
+    /** Checkout sessions already applied, so a retried webhook does not add time twice. */
+    payments: string[];
+}
+
+/** One live source of a paid plan. */
+export interface Entitlement {
+    kind: 'subscription' | 'pass';
+    plan: PaidPlanId;
+    interval: BillingInterval;
+    status: string;
+    periodStart: number;
+    periodEnd: number;
+    /** False only for a subscription that will renew by itself. */
+    ending: boolean;
+}
+
 export interface Lease {
     purpose: LivePurpose;
     at: number;
@@ -48,7 +78,12 @@ export interface Account {
     uid: string;
     createdAt: number;
     customerId?: string;
+    /** Stripe subscriptions by id (older accounts kept a single `subscription`). */
+    subs?: Record<string, Subscription>;
     subscription?: Subscription;
+    pass?: Pass;
+    /** When the user confirmed they are 18 or older. */
+    adultAt?: number;
     /** Start of the current monthly usage window. */
     windowStart: number;
     /** Which plan the window belongs to; a new plan starts a fresh window. */
@@ -62,7 +97,11 @@ export interface Account {
     leasedUsdToday: number;
 }
 
-export interface MonthTotals { freeUsd: number; paidUsd: number; ownerUsd: number; revenueGrossMxn: number; revenueNetMxn: number }
+export interface MonthTotals {
+    freeUsd: number; paidUsd: number; ownerUsd: number; revenueGrossMxn: number; revenueNetMxn: number;
+    /** Voice time handed out this month before refunds, USD: the most it could have cost. */
+    freeLeasedUsd?: number; paidLeasedUsd?: number;
+}
 
 export interface Totals {
     spendUsd: { free: number; paid: number; owner: number };
@@ -84,19 +123,29 @@ export interface LedgerOptions {
     /** Monthly cap on what free users together may cost, USD. */
     freeBudgetUsd?: number;
     usdMxn?: number;
+    /** Keep AI off until the account confirms it is 18 or older (default on). */
+    requireAdult?: boolean;
     now?: () => number;
     log?: Pick<Console, 'warn' | 'error'>;
 }
 
-export type Refusal = { ok: false; reason: 'quota' | 'daily' | 'paused'; message: string; plan: PlanId };
+export type RefusalReason = 'quota' | 'daily' | 'paused' | 'full' | 'age';
+export type Refusal = { ok: false; reason: RefusalReason; message: string; plan: PlanId };
 export type LeaseGrant = { ok: true; leaseId: string; seconds: number; plan: PlanId };
 
 const GRACE_MS = 3 * 24 * 3600 * 1000;
-const LIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+/** Subscription statuses that give the plan. 'trialing' is left out on purpose: Glossos only uses a
+ *  trial to start a new subscription when a plan the user already paid for runs out. */
+const LIVE_STATUSES = new Set(['active', 'past_due']);
+/** Statuses of a subscription that will charge the card again by itself. */
+const RENEWING_STATUSES = new Set(['active', 'past_due', 'trialing']);
 const MAX_LEASE_SECONDS: Record<LivePurpose, number> = { talk: 600, assist: 1200, voice: 600 };
 const OWNER_LEASE_SECONDS = 1800;
 const MIN_LEASE_SECONDS = 20;
 const MIN_TEXT_USD = 0.0005;
+/** Free voice time handed out per month may reach this many times the free budget. */
+const FREE_LEASE_FACTOR = 3;
+const OLD_SUBSCRIPTION_MS = 90 * 24 * 3600 * 1000;
 const TOTALS_KEY = 'global/totals';
 const TOTALS_CACHE_MS = 15_000;
 
@@ -104,7 +153,7 @@ const mexicoDay = (t: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'A
 const monthKey = (t: number) => new Date(t).toISOString().slice(0, 7);
 
 /** Adds `n` calendar months to a timestamp (UTC), clamping to the month's last day. */
-function addMonths(t: number, n: number): number {
+export function addMonths(t: number, n: number): number {
     const d = new Date(t);
     const day = d.getUTCDate();
     d.setUTCDate(1);
@@ -127,7 +176,32 @@ export function emptyTotals(): Totals {
     return { spendUsd: { free: 0, paid: 0, owner: 0 }, revenueGrossMxn: 0, revenueNetMxn: 0, months: {}, events: [] };
 }
 
-const emptyMonth = (): MonthTotals => ({ freeUsd: 0, paidUsd: 0, ownerUsd: 0, revenueGrossMxn: 0, revenueNetMxn: 0 });
+const emptyMonth = (): MonthTotals => ({ freeUsd: 0, paidUsd: 0, ownerUsd: 0, revenueGrossMxn: 0, revenueNetMxn: 0, freeLeasedUsd: 0, paidLeasedUsd: 0 });
+
+/** The account's live paid plans, best first (higher plan; on a tie a pass, then the older one). */
+export function liveEntitlements(a: Account | null, t: number): Entitlement[] {
+    if (!a) return [];
+    const out: Entitlement[] = [];
+    const subs = Object.values(a.subs ?? {}).concat(a.subscription ? [a.subscription] : []);
+    for (const s of subs) {
+        if (!LIVE_STATUSES.has(s.status) || s.periodEnd + GRACE_MS <= t) continue;
+        out.push({ kind: 'subscription', plan: s.plan, interval: s.interval, status: s.status, periodStart: s.periodStart, periodEnd: s.periodEnd, ending: !!s.cancelAtPeriodEnd });
+    }
+    const p = a.pass;
+    if (p && p.periodEnd > t) {
+        out.push({ kind: 'pass', plan: p.plan, interval: p.interval, status: 'active', periodStart: p.periodStart, periodEnd: p.periodEnd, ending: true });
+    }
+    return out.sort((x, y) =>
+        PLAN_RANK[y.plan] - PLAN_RANK[x.plan]
+        || (x.kind === y.kind ? 0 : x.kind === 'pass' ? -1 : 1)
+        || x.periodStart - y.periodStart);
+}
+
+/** A subscription that will charge the card again by itself (including one waiting to start). */
+export function renewingSubscription(a: Account | null, t: number): Subscription | null {
+    const subs = Object.values(a?.subs ?? {}).concat(a?.subscription ? [a.subscription] : []);
+    return subs.find(s => RENEWING_STATUSES.has(s.status) && !s.cancelAtPeriodEnd && s.periodEnd + GRACE_MS > t) ?? null;
+}
 
 export function createLedger(opts: LedgerOptions) {
     const store = opts.store;
@@ -138,37 +212,41 @@ export function createLedger(opts: LedgerOptions) {
     const maxSpendShare = opts.maxSpendShare ?? 0.8;
     const freeBudgetUsd = opts.freeBudgetUsd ?? 3;
     const usdMxn = opts.usdMxn ?? DEFAULT_USD_MXN;
+    const requireAdult = opts.requireAdult ?? true;
     let totalsCache: { value: Totals; at: number } | null = null;
 
     const accountKey = (uid: string) => `accounts/${uid.replace(/[^A-Za-z0-9_-]/g, '_')}`;
 
     const isOwner = (c: Caller) => !!c.email && c.emailVerified !== false && owners.has(c.email.toLowerCase());
 
-    function subscriptionPlan(acct: Account | null, t: number): PaidPlanId | null {
-        const sub = acct?.subscription;
-        return sub && LIVE_STATUSES.has(sub.status) && sub.periodEnd + GRACE_MS > t ? sub.plan : null;
-    }
-
     function planOf(acct: Account | null, caller: Caller, t: number): PlanId {
         if (isOwner(caller)) return 'owner';
-        return subscriptionPlan(acct, t) ?? 'free';
+        return liveEntitlements(acct, t)[0]?.plan ?? 'free';
     }
+
+    const isAdult = (a: Account, caller: Caller) => !requireAdult || isOwner(caller) || !!a.adultAt;
 
     /** Brings an account up to date: new window, new day, expired leases charged in full. */
     function normalize(acct: Account | null, caller: Caller, t: number): Account {
         const a: Account = acct ?? {
             uid: caller.uid, createdAt: t, windowStart: t, usedUsd: 0, leases: {}, day: mexicoDay(t), leasedUsdToday: 0,
         };
+        if (a.subscription) {
+            a.subs = { ...(a.subs ?? {}), [a.subscription.subscriptionId ?? 'default']: a.subscription };
+            delete a.subscription;
+        }
+        for (const [id, s] of Object.entries(a.subs ?? {})) {
+            if (s.periodEnd + OLD_SUBSCRIPTION_MS < t) delete a.subs![id];
+        }
         for (const [id, lease] of Object.entries(a.leases)) {
             if (t > lease.at + lease.seconds * 1000 + 60_000) {
                 a.usedUsd += lease.reservedUsd;
                 delete a.leases[id];
             }
         }
-        const paid = subscriptionPlan(a, t);
-        const anchor = paid ? a.subscription!.periodStart : a.createdAt;
-        const start = monthlyWindowStart(anchor, t);
-        const windowPlan: PlanId = paid ?? 'free';
+        const best = liveEntitlements(a, t)[0];
+        const start = monthlyWindowStart(best ? best.periodStart : a.createdAt, t);
+        const windowPlan: PlanId = best?.plan ?? 'free';
         if (start !== a.windowStart || windowPlan !== (a.windowPlan ?? 'free')) {
             a.windowStart = start;
             a.windowPlan = windowPlan;
@@ -201,24 +279,30 @@ export function createLedger(opts: LedgerOptions) {
     /** Spend the guard allows for non-owner usage, USD. */
     const spendCeilingUsd = (tot: Totals) => floatUsd + (tot.revenueNetMxn / usdMxn) * maxSpendShare;
 
-    async function guard(plan: PlanId, extraUsd: number): Promise<string | null> {
+    async function guard(plan: PlanId, extraUsd: number, voice = false): Promise<{ reason: RefusalReason; message: string } | null> {
         if (plan === 'owner') return null;
         const tot = await readTotals();
         const spent = tot.spendUsd.free + tot.spendUsd.paid;
         if (spent + extraUsd > spendCeilingUsd(tot)) {
             log.warn(`[billing] guard: spend $${spent.toFixed(2)} at ceiling $${spendCeilingUsd(tot).toFixed(2)}`);
-            return 'Glossos is very busy right now. Please try again later.';
+            return { reason: 'paused', message: 'Glossos is very busy right now. Please try again later.' };
         }
         if (plan === 'free') {
-            const month = tot.months[monthKey(now())]?.freeUsd ?? 0;
-            if (month + extraUsd > freeBudgetUsd) return 'Free practice is full for this month. Upgrade to keep going.';
+            const month = tot.months[monthKey(now())];
+            if ((month?.freeUsd ?? 0) + extraUsd > freeBudgetUsd) {
+                return { reason: 'full', message: 'Free practice is full for this month. Choose a plan to keep going.' };
+            }
+            if (voice && (month?.freeLeasedUsd ?? 0) + extraUsd > freeBudgetUsd * FREE_LEASE_FACTOR) {
+                log.warn('[billing] guard: free voice time handed out reached its monthly cap');
+                return { reason: 'full', message: 'Free voice practice is full for this month. Choose a plan to keep talking.' };
+            }
         }
         return null;
     }
 
-    /** Adds spend to the global totals. Best effort: a failure here must not fail the user's request. */
-    async function addSpend(plan: PlanId, usd: number) {
-        if (!usd) return;
+    /** Adds spend (and voice time handed out) to the global totals. Best effort: a failure here must not fail the user's request. */
+    async function addSpend(plan: PlanId, usd: number, leasedUsd = 0) {
+        if (!usd && !leasedUsd) return;
         const bucket = plan === 'owner' ? 'owner' : plan === 'free' ? 'free' : 'paid';
         const ym = monthKey(now());
         try {
@@ -228,6 +312,10 @@ export function createLedger(opts: LedgerOptions) {
                 const m = (tot.months[ym] ??= emptyMonth());
                 const field = bucket === 'owner' ? 'ownerUsd' : bucket === 'free' ? 'freeUsd' : 'paidUsd';
                 m[field] = Math.max(0, m[field] + usd);
+                if (leasedUsd > 0 && bucket !== 'owner') {
+                    const lf = bucket === 'free' ? 'freeLeasedUsd' : 'paidLeasedUsd';
+                    m[lf] = (m[lf] ?? 0) + leasedUsd;
+                }
                 return tot;
             });
             totalsCache = { value: next, at: now() };
@@ -249,6 +337,11 @@ export function createLedger(opts: LedgerOptions) {
                 : 'You have used this month\'s AI minutes. They refill on your next billing date, or you can upgrade.',
         };
     }
+
+    const ageRefusal = (plan: PlanId): Refusal => ({
+        ok: false, reason: 'age', plan,
+        message: 'Please confirm you are 18 or older to use the AI features.',
+    });
 
     let lastPing = 0;
 
@@ -272,23 +365,36 @@ export function createLedger(opts: LedgerOptions) {
             const plan = planOf(a, caller, t);
             const allowance = PLANS[plan].minutes;
             const left = remainingUsd(a, plan) / MINUTE_USD;
-            const paid = subscriptionPlan(a, t);
+            const live = liveEntitlements(a, t);
+            const sub = live.find(e => e.kind === 'subscription');
+            const pass = live.find(e => e.kind === 'pass');
+            const waiting = Object.values(a.subs ?? {}).find(s => s.status === 'trialing' && s.periodEnd > t);
             return {
                 plan,
                 minutesTotal: allowance,
                 minutesLeft: Number.isFinite(allowance) ? Math.max(0, left) : Number.POSITIVE_INFINITY,
                 /** When the minutes refill. */
                 renewsAt: addMonths(a.windowStart, 1),
-                subscription: paid ? {
-                    plan: paid,
-                    interval: a.subscription!.interval,
-                    status: a.subscription!.status,
-                    periodEnd: a.subscription!.periodEnd,
-                    cancelAtPeriodEnd: !!a.subscription!.cancelAtPeriodEnd,
+                subscription: sub ? {
+                    plan: sub.plan, interval: sub.interval, status: sub.status, periodEnd: sub.periodEnd, cancelAtPeriodEnd: sub.ending,
                 } : null,
+                pass: pass ? { plan: pass.plan, interval: pass.interval, periodEnd: pass.periodEnd } : null,
+                /** A subscription that starts charging when a paid plan runs out. */
+                upcoming: waiting ? { plan: waiting.plan, interval: waiting.interval, startsAt: waiting.periodEnd } : null,
                 hasCustomer: !!a.customerId,
                 owner: plan === 'owner',
+                adult: isAdult(a, caller),
             };
+        },
+
+        /** Records that the user confirmed they are 18 or older (once). */
+        async confirmAdult(caller: Caller): Promise<void> {
+            const t = now();
+            await update<Account>(store, accountKey(caller.uid), cur => {
+                const a = normalize(cur, caller, t);
+                a.adultAt ??= t;
+                return a;
+            });
         },
 
         /** Reserves Live voice time and returns how long the token may live. */
@@ -299,8 +405,9 @@ export function createLedger(opts: LedgerOptions) {
             let reserved = 0;
             const peek = await getAccount(caller);
             const peekPlan = planOf(peek, caller, t);
-            const blocked = await guard(peekPlan, rate * MIN_LEASE_SECONDS);
-            if (blocked) return { ok: false, reason: 'paused', message: blocked, plan: peekPlan };
+            if (!isAdult(peek, caller)) return ageRefusal(peekPlan);
+            const blocked = await guard(peekPlan, rate * MIN_LEASE_SECONDS, true);
+            if (blocked) return { ok: false, ...blocked, plan: peekPlan };
 
             await update<Account>(store, accountKey(caller.uid), cur => {
                 const a = normalize(cur, caller, t);
@@ -323,7 +430,7 @@ export function createLedger(opts: LedgerOptions) {
                 result = { ok: true, leaseId, seconds, plan };
                 return a;
             });
-            if (result && (result as LeaseGrant).ok) await addSpend((result as LeaseGrant).plan, reserved);
+            if (result && (result as LeaseGrant).ok) await addSpend((result as LeaseGrant).plan, reserved, reserved);
             return result!;
         },
 
@@ -355,9 +462,10 @@ export function createLedger(opts: LedgerOptions) {
         async checkText(caller: Caller): Promise<{ ok: true; plan: PlanId } | Refusal> {
             const a = await getAccount(caller);
             const plan = planOf(a, caller, now());
+            if (!isAdult(a, caller)) return ageRefusal(plan);
             if (remainingUsd(a, plan) < MIN_TEXT_USD) return quotaRefusal(plan);
             const blocked = await guard(plan, MIN_TEXT_USD);
-            if (blocked) return { ok: false, reason: 'paused', message: blocked, plan };
+            if (blocked) return { ok: false, ...blocked, plan };
             return { ok: true, plan };
         },
 
@@ -375,14 +483,44 @@ export function createLedger(opts: LedgerOptions) {
             await addSpend(plan, usd);
         },
 
-        /** Stores the subscription Stripe reports for a user. */
+        /** Stores a subscription Stripe reports for a user (and links the Stripe customer). */
         async applySubscription(uid: string, sub: Subscription | null, customerId?: string) {
             await update<Account>(store, accountKey(uid), cur => {
                 const a = normalize(cur, { uid }, now());
                 if (customerId) a.customerId = customerId;
-                if (sub) a.subscription = sub;
+                if (sub) a.subs = { ...(a.subs ?? {}), [sub.subscriptionId ?? 'default']: sub };
                 return normalize(a, { uid }, now());
             });
+        },
+
+        /**
+         * Adds a paid-once plan. The same plan while one is live adds the time on top; a different
+         * plan starts today. Returns false if this payment was already applied.
+         */
+        async applyPass(uid: string, plan: PaidPlanId, interval: BillingInterval, paymentId: string): Promise<boolean> {
+            const t = now();
+            const months = interval === 'year' ? 12 : 1;
+            let added = false;
+            await update<Account>(store, accountKey(uid), cur => {
+                const a = normalize(cur, { uid }, t);
+                const p = a.pass;
+                added = !p?.payments.includes(paymentId);
+                if (!added) return a;
+                const payments = [...(p?.payments ?? []), paymentId].slice(-20);
+                a.pass = p && p.periodEnd > t && p.plan === plan
+                    ? { ...p, interval, periodEnd: addMonths(p.periodEnd, months), payments }
+                    : { plan, interval, periodStart: t, periodEnd: addMonths(t, months), payments };
+                return normalize(a, { uid }, t);
+            });
+            return added;
+        },
+
+        /** What a user already pays for: live plans and any subscription that renews by itself. */
+        async coverage(uid: string): Promise<{ live: Entitlement[]; renewing: Subscription | null }> {
+            const t = now();
+            const { value } = await store.get<Account>(accountKey(uid));
+            const a = value ? normalize(value, { uid }, t) : null;
+            return { live: liveEntitlements(a, t), renewing: renewingSubscription(a, t) };
         },
 
         async customerOf(uid: string): Promise<string | undefined> {
@@ -390,14 +528,14 @@ export function createLedger(opts: LedgerOptions) {
         },
 
         /** Counts a payment once (by event id). Returns false if it was already counted. */
-        async recordRevenue(eventId: string, grossMxn: number): Promise<boolean> {
+        async recordRevenue(eventId: string, grossMxn: number, method: PaymentMethod = 'card'): Promise<boolean> {
             let added = false;
             const ym = monthKey(now());
             const next = await update<Totals>(store, TOTALS_KEY, cur => {
                 const tot = cur ?? emptyTotals();
                 added = !tot.events.includes(eventId);
                 if (!added) return tot;
-                const net = netRevenueMxn(grossMxn);
+                const net = netRevenueMxn(grossMxn, method);
                 tot.revenueGrossMxn += grossMxn;
                 tot.revenueNetMxn += net;
                 const m = (tot.months[ym] ??= emptyMonth());
@@ -414,12 +552,16 @@ export function createLedger(opts: LedgerOptions) {
         async report() {
             const tot = await readTotals(true);
             const ym = monthKey(now());
-            const m = tot.months[ym] ?? emptyMonth();
+            const m = { ...emptyMonth(), ...(tot.months[ym] ?? {}) };
             const spent = tot.spendUsd.free + tot.spendUsd.paid + tot.spendUsd.owner;
             return {
                 month: ym,
                 usdMxn,
-                thisMonth: { ...m, totalUsd: m.freeUsd + m.paidUsd + m.ownerUsd },
+                thisMonth: {
+                    ...m,
+                    totalUsd: m.freeUsd + m.paidUsd + m.ownerUsd,
+                    voiceLeasedUsd: (m.freeLeasedUsd ?? 0) + (m.paidLeasedUsd ?? 0),
+                },
                 allTime: {
                     revenueGrossMxn: tot.revenueGrossMxn,
                     revenueNetMxn: tot.revenueNetMxn,
@@ -427,7 +569,7 @@ export function createLedger(opts: LedgerOptions) {
                     totalSpendUsd: spent,
                     estimatedProfitMxn: tot.revenueNetMxn - spent * usdMxn,
                 },
-                guard: { ceilingUsd: spendCeilingUsd(tot), floatUsd, maxSpendShare, freeBudgetUsd },
+                guard: { ceilingUsd: spendCeilingUsd(tot), floatUsd, maxSpendShare, freeBudgetUsd, freeVoiceCapUsd: freeBudgetUsd * FREE_LEASE_FACTOR },
             };
         },
     };

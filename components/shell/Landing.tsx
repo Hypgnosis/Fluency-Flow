@@ -72,7 +72,7 @@ export const Landing: React.FC = () => (
             </div>
 
             <motion.footer {...rise(0.4)} className="text-xs text-slate-600">
-                © {new Date().getFullYear()} Glossos
+                © {new Date().getFullYear()} Glossos · For adults 18 and over
             </motion.footer>
         </div>
     </div>

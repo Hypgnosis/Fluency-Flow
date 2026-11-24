@@ -13,6 +13,11 @@ export type PlanId = 'free' | 'plus' | 'pro' | 'owner';
 export type PaidPlanId = 'plus' | 'pro';
 export type BillingInterval = 'month' | 'year';
 export type LivePurpose = 'talk' | 'assist' | 'voice';
+/** How a payment was made: card (subscriptions and pay-once) or cash at OXXO (pay-once only). */
+export type PaymentMethod = 'card' | 'oxxo';
+
+/** Plan order, for "is this plan at least as good as that one". */
+export const PLAN_RANK: Record<PlanId, number> = { free: 0, plus: 1, pro: 2, owner: 3 };
 
 export interface Plan {
     id: PlanId;
@@ -114,22 +119,30 @@ export function liveCostPerSecond(purpose: LivePurpose): number {
     return perMinute / 60;
 }
 
-/** What actually reaches the owner from one payment: IVA (16%) and Stripe's fee (3.6% + 3 MXN, plus IVA) removed. */
-export function netRevenueMxn(grossMxn: number): number {
+/** Stripe Mexico fees before IVA (stripe.com/mx/pricing, 2026-11-24): domestic cards and OXXO vouchers. */
+export const STRIPE_FEES: Record<PaymentMethod, { share: number; fixedMxn: number }> = {
+    card: { share: 0.036, fixedMxn: 3 },
+    oxxo: { share: 0.04, fixedMxn: 3 },
+};
+
+/** What actually reaches the owner from one payment: IVA (16%) and Stripe's fee (plus IVA on the fee) removed. */
+export function netRevenueMxn(grossMxn: number, method: PaymentMethod = 'card'): number {
+    const fee = STRIPE_FEES[method];
     const iva = grossMxn - grossMxn / 1.16;
-    const stripeFee = (grossMxn * 0.036 + 3) * 1.16;
+    const stripeFee = (grossMxn * fee.share + fee.fixedMxn) * 1.16;
     return grossMxn - iva - stripeFee;
 }
 
 /**
  * Share of a plan's net revenue that Gemini would cost if the user spent every minute.
- * Kept under 0.8 for every plan by a test, so even the heaviest users are profitable.
+ * Kept under 0.8 for every plan by a test, so even the heaviest users are profitable. The default
+ * is OXXO, the dearer way to pay.
  */
-export function worstCaseCostShare(plan: PaidPlanId, interval: BillingInterval, usdMxn = DEFAULT_USD_MXN): number {
+export function worstCaseCostShare(plan: PaidPlanId, interval: BillingInterval, usdMxn = DEFAULT_USD_MXN, method: PaymentMethod = 'oxxo'): number {
     const p = PLANS[plan];
     const months = interval === 'year' ? 12 : 1;
     const costMxn = p.minutes * MINUTE_USD * months * usdMxn;
-    return costMxn / netRevenueMxn(p.price![interval]);
+    return costMxn / netRevenueMxn(p.price![interval], method);
 }
 
 /** Formats minutes for display ("52 min", "4.5 min", "Unlimited"). */

@@ -1,6 +1,6 @@
 import { encode, pcmTo16kInt16 } from '../utils/audioUtils';
 import { authHeaders } from './genaiClient';
-import { endLease, handlePaymentRequired } from './billing';
+import { endLease, handlePaymentRequired, isBillingRefusal } from './billing';
 import type { LivePurpose } from './billing/plans';
 import type { LiveFunctionResponse } from './tutorSkills/types';
 
@@ -85,7 +85,7 @@ export async function resolveLiveWebSocketUrl(fetchImpl: typeof fetch = fetch, p
   }
   const res = await fetchImpl('/api/live-token', { method: 'POST', headers: await authHeaders(), body: JSON.stringify({ purpose }) });
   const body = await res.json().catch(() => ({}));
-  if (res.status === 402) throw new Error(handlePaymentRequired(body));
+  if (isBillingRefusal(res.status, body)) throw new Error(handlePaymentRequired(body));
   if (!res.ok || !body.token) {
     throw new Error(body?.error?.message || `Could not start a voice session (${res.status})`);
   }

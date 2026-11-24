@@ -1,8 +1,17 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { loadSkillPrefs, saveSkillPrefs, type SkillPrefs } from '../../services/tutorSkills/registry';
 
+export interface LanguageEntry {
+    name: string;
+    native: string;
+    code: string;
+    hello: string;
+    /** Still in testing: the AI makes more mistakes, and voice recognition is weak (Maya, measured 2026-11-24). */
+    beta?: boolean;
+}
+
 /** Languages Glossos teaches, with how each is written in its own language, a short code and a first phrase to try. */
-export const LANGUAGES: { name: string; native: string; code: string; hello: string }[] = [
+export const LANGUAGES: LanguageEntry[] = [
     { name: 'English', native: 'English', code: 'EN', hello: 'Hi! How are you today?' },
     { name: 'Spanish', native: 'Español', code: 'ES', hello: '¡Hola! ¿Qué tal tu día?' },
     { name: 'French', native: 'Français', code: 'FR', hello: 'Bonjour ! Comment ça va ?' },
@@ -14,10 +23,14 @@ export const LANGUAGES: { name: string; native: string; code: string; hello: str
     { name: 'Chinese', native: '中文', code: 'ZH', hello: '你好！你今天怎么样？' },
     { name: 'Russian', native: 'Русский', code: 'RU', hello: 'Привет! Как дела?' },
     { name: 'Slovak', native: 'Slovenčina', code: 'SK', hello: 'Ahoj! Ako sa máš?' },
-    { name: 'Yucatec Mayan', native: 'Maaya t’aan', code: 'YUA', hello: '¡Ba’ax ka wa’alik!' },
+    { name: 'Yucatec Mayan', native: 'Maaya t’aan', code: 'YUA', hello: '¡Ba’ax ka wa’alik!', beta: true },
 ];
 
-export const languageMeta = (name: string) => LANGUAGES.find(l => l.name === name) ?? { name, native: name, code: name.slice(0, 2).toUpperCase(), hello: '' };
+export const languageMeta = (name: string): LanguageEntry => LANGUAGES.find(l => l.name === name) ?? { name, native: name, code: name.slice(0, 2).toUpperCase(), hello: '' };
+
+/** Second line under a language in pickers: its English name if different, and "Beta". */
+export const languageDescription = (l: LanguageEntry): string | undefined =>
+    [l.native !== l.name ? l.name : '', l.beta ? 'Beta' : ''].filter(Boolean).join(' · ') || undefined;
 
 export const LEVELS = [
     { id: 'Beginner', label: 'Beginner', tag: 'Foundation', description: 'Short sentences, lots of help in your language.' },

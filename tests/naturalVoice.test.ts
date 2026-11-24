@@ -2,6 +2,7 @@ vi.mock('../services/firebase', () => ({ auth: null, db: null, isFirebaseConfigu
 
 import { _setLiveConfig } from '../services/geminiService';
 import { _createNaturalVoice, READER_MODEL } from '../services/naturalVoice';
+import { languageNameForLocale } from '../services/languages';
 
 class FakeWebSocket {
     static OPEN = 1;
@@ -112,8 +113,7 @@ describe('language hints', () => {
         await vi.waitFor(() => expect(FakeWebSocket.all[0].sent[1]).toEqual({ realtimeInput: { text: '<script language="Spanish">pan</script>' } }));
     });
 
-    it('maps locales to language names', async () => {
-        const { languageNameForLocale } = await import('../services/languages');
+    it('maps locales to language names', () => {
         expect(languageNameForLocale('es-MX')).toBe('Spanish');
         expect(languageNameForLocale('yua')).toBe('Yucatec Mayan');
         expect(languageNameForLocale('xx-YY')).toBeUndefined();

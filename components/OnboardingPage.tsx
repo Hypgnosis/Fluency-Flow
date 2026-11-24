@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { LANGUAGES, LEVELS, languageMeta } from './shell/LearningSettings';
+import { LANGUAGES, LEVELS, languageDescription, languageMeta } from './shell/LearningSettings';
 import { Button, LangBadge, OptionTile, cx } from './ui/primitives';
 import { Icon, type IconName } from './ui/Icon';
 import { Wordmark } from './ui/Logo';
@@ -96,7 +96,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
                                                 onSelect={() => pickLearn(l.name)}
                                                 leading={<LangBadge code={l.code} tone={learningLanguage === l.name ? 'gold' : 'slate'} />}
                                                 title={l.native}
-                                                description={l.native !== l.name ? l.name : undefined}
+                                                description={languageDescription(l)}
                                             />
                                         ))}
                                     </div>
@@ -115,7 +115,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
                                                 onSelect={() => setNativeLanguage(l.name)}
                                                 leading={<LangBadge code={l.code} tone={nativeLanguage === l.name ? 'gold' : 'slate'} />}
                                                 title={l.native}
-                                                description={l.native !== l.name ? l.name : undefined}
+                                                description={languageDescription(l)}
                                             />
                                         ))}
                                     </div>

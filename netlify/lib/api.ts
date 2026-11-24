@@ -51,10 +51,14 @@ async function later(ctx: RequestContext | undefined, work: () => Promise<unknow
 /** If the plan cannot be checked, AI stays off (no spending without bookkeeping). */
 const BILLING_UNAVAILABLE = 'Glossos could not check your plan just now. Please try again in a moment.';
 
-/** 402 with the reason, so the app can open the plans screen. */
+/** 402 with the reason, so the app can open the plans screen (403 when the age check is missing). */
 export function paywallResponse(refusal: Refusal): Response {
-    return jsonResponse(402, { error: { code: 402, message: refusal.message, reason: refusal.reason, plan: refusal.plan } });
+    const status = refusal.reason === 'age' ? 403 : 402;
+    return jsonResponse(status, { error: { code: status, message: refusal.message, reason: refusal.reason, plan: refusal.plan } });
 }
+
+/** Shown when Google refuses for billing reasons (Gemini Prepay credit used up). */
+const GEMINI_PAUSED = 'Glossos AI is paused for a moment. Please try again later.';
 
 /** Reads the function configuration from Netlify environment variables. */
 export function configFromEnv(env: Record<string, string | undefined> = process.env): ApiConfig {
@@ -137,12 +141,18 @@ async function readJson(req: Request): Promise<Record<string, unknown> | Respons
     }
 }
 
-async function upstreamError(res: Response): Promise<Response> {
+async function upstreamError(res: Response, log: Pick<Console, 'error'>): Promise<Response> {
     const text = await res.text().catch(() => '');
     let message = text.slice(0, 300) || res.statusText;
     try {
         message = JSON.parse(text).error.message || message;
     } catch { /* not JSON */ }
+    // A 402 from Google means the Gemini account is out of credit. It must not reach the app as
+    // a 402, which would show the user the plans screen as if *they* had run out.
+    if (res.status === 402) {
+        log.error(`[api] GEMINI BILLING: Google refused with 402 (Prepay credit used up?): ${message}`);
+        return errorResponse(503, GEMINI_PAUSED);
+    }
     return errorResponse(res.status, message);
 }
 
@@ -203,7 +213,7 @@ export function createGenaiHandler(config: ApiConfig) {
             log.error(`[api] Upstream request failed: ${(err as Error).message}`);
             return errorResponse(502, 'Gemini is unreachable right now');
         }
-        if (!upstream.ok) return upstreamError(upstream);
+        if (!upstream.ok) return upstreamError(upstream, log);
 
         if (route === 'generate') {
             const text = await upstream.text();
@@ -316,7 +326,7 @@ export function createLiveTokenHandler(config: ApiConfig) {
         }
         if (!upstream.ok) {
             await refund();
-            return upstreamError(upstream);
+            return upstreamError(upstream, log);
         }
 
         const data = (await upstream.json().catch(() => ({}))) as { name?: string };

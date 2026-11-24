@@ -3,7 +3,7 @@ import { BUILT_IN_SKILLS } from '../../services/tutorSkills/skills';
 import { isSkillEnabled } from '../../services/tutorSkills/registry';
 import { Icon } from '../ui/Icon';
 import { Eyebrow, LangBadge, OptionTile, Segmented, Sheet, Switch } from '../ui/primitives';
-import { LANGUAGES, LEVELS, VOICES, languageMeta, useLearningSettings } from './LearningSettings';
+import { LANGUAGES, LEVELS, VOICES, languageDescription, languageMeta, useLearningSettings } from './LearningSettings';
 
 interface SettingsSheetProps {
     open: boolean;
@@ -60,7 +60,7 @@ export const SettingsSheet: React.FC<SettingsSheetProps> = ({ open, onClose, loc
                             onSelect={() => choose(l.name)}
                             leading={<LangBadge code={l.code} tone={current === l.name ? 'gold' : 'slate'} />}
                             title={l.native}
-                            description={l.native !== l.name ? l.name : undefined}
+                            description={languageDescription(l)}
                             className="py-2.5"
                         />
                     ))}

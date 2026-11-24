@@ -1,7 +1,9 @@
 /**
  * /api/billing/* routes:
  *   status    - plan, AI minutes left, subscription (signed in)
- *   checkout  - Stripe Checkout page for a plan (signed in, not a guest)
+ *   adult     - records that the user confirmed they are 18 or older (signed in)
+ *   checkout  - Stripe Checkout for a plan: a subscription, or `once` to pay for a month or a
+ *               year by card or OXXO (signed in, not a guest)
  *   portal    - Stripe customer portal (signed in, has paid before)
  *   end       - ends a Live voice lease, returning unused time (signed in)
  *   webhook   - Stripe events (Stripe signature, no sign-in)
@@ -9,7 +11,7 @@
  */
 
 import { createGuard, errorResponse, type ApiConfig } from '../api.ts';
-import { isInterval, isPaidPlan } from '../../../services/billing/plans.ts';
+import { PLAN_RANK, isInterval, isPaidPlan } from '../../../services/billing/plans.ts';
 import type { Ledger } from './ledger.ts';
 import { createStripeClient, handleStripeEvent, verifyStripeSignature, StripeError } from './stripe.ts';
 
@@ -19,6 +21,9 @@ export interface BillingHandlerConfig extends Pick<ApiConfig, 'apiKey' | 'projec
     stripeWebhookSecret?: string;
     now?: () => number;
 }
+
+/** Stripe needs a trial to end at least 48 hours from now. */
+const MIN_TRIAL_MS = 49 * 3600 * 1000;
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {
     status,
@@ -79,19 +84,33 @@ export function createBillingHandler(config: BillingHandlerConfig) {
                 case 'status':
                     return json(200, { ...(await ledger.status(caller)), paymentsReady, guest: !!caller.anonymous });
 
+                case 'adult':
+                    if (body.confirm !== true) return errorResponse(400, 'confirm must be true');
+                    await ledger.confirmAdult(caller);
+                    return json(200, { ...(await ledger.status(caller)), paymentsReady, guest: !!caller.anonymous });
+
                 case 'checkout': {
                     if (!paymentsReady) return errorResponse(503, 'Payments open soon.');
                     if (caller.anonymous) return errorResponse(403, 'Create a free account first, so your plan stays with you.');
                     if (!isPaidPlan(body.plan) || !isInterval(body.interval)) return errorResponse(400, 'Unknown plan');
-                    const checkoutUrl = await stripe!.checkout({
+                    // Never charge twice for the same time: one renewing subscription at most.
+                    const { live, renewing } = await ledger.coverage(caller.uid);
+                    if (renewing) {
+                        return errorResponse(409, 'You already have a subscription that renews by itself. Open Manage subscription to change or cancel it.');
+                    }
+                    const common = {
                         uid: caller.uid,
                         plan: body.plan,
                         interval: body.interval,
                         origin: url.origin,
                         customerId: await ledger.customerOf(caller.uid),
                         email: caller.email,
-                    });
-                    return json(200, { url: checkoutUrl });
+                    };
+                    if (body.once === true) return json(200, { url: await stripe!.payOnce(common) });
+                    // Already paid for this plan (or a better one) until a date? The card is first charged then.
+                    const coveredUntil = Math.max(0, ...live.filter(e => PLAN_RANK[e.plan] >= PLAN_RANK[body.plan as 'plus' | 'pro']).map(e => e.periodEnd));
+                    const trialEnd = coveredUntil - now() > MIN_TRIAL_MS ? Math.floor(coveredUntil / 1000) : undefined;
+                    return json(200, { url: await stripe!.checkout({ ...common, trialEnd }) });
                 }
 
                 case 'portal': {

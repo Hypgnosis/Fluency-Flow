@@ -139,7 +139,7 @@ export default function ConversationAssist({ nativeLanguage, learnLanguage, leve
             <div ref={feedRef} className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto w-full max-w-2xl px-4 pb-6 pt-2 sm:px-6">
                     {items.length === 0 && !partial ? (
-                        <Intro listening={listening} learnName={learnLanguage} nativeName={nativeLanguage} />
+                        <Intro listening={listening} learnName={learnLanguage} nativeName={nativeLanguage} betaName={[learn, native].find(l => l.beta)?.name} />
                     ) : (
                         <div className="space-y-3 pt-2">
                             <AnimatePresence initial={false}>
@@ -245,7 +245,7 @@ const heardDifferently = (item: Item) => {
     return !!item.help?.meant && n(item.help.meant) !== n(item.text);
 };
 
-const Intro: React.FC<{ listening: boolean; learnName: string; nativeName: string }> = ({ listening, learnName, nativeName }) => (
+const Intro: React.FC<{ listening: boolean; learnName: string; nativeName: string; betaName?: string }> = ({ listening, learnName, nativeName, betaName }) => (
     <div className="flex min-h-[420px] flex-col items-center justify-center py-8 text-center">
         <div className="relative mb-8 flex h-36 w-36 items-center justify-center">
             {[0, 1, 2].map(i => (
@@ -286,6 +286,15 @@ const Intro: React.FC<{ listening: boolean; learnName: string; nativeName: strin
                         </motion.div>
                     ))}
                 </div>
+                {betaName && (
+                    <p className="mt-5 flex max-w-md items-start gap-2 rounded-2xl border border-gold-400/20 bg-gold-500/[0.06] px-3.5 py-2.5 text-left text-[13px] leading-snug text-gold-100">
+                        <Icon name="help" size={15} className="mt-0.5 shrink-0 text-gold-400" />
+                        <span>
+                            <span className="font-semibold">{betaName} is in beta.</span>{' '}
+                            Listening does not understand spoken {betaName} well yet, so Assist will often get sentences wrong. For now, Lens, Chat and Write work better for {betaName}.
+                        </span>
+                    </p>
+                )}
                 <p className="mt-5 flex max-w-md items-start gap-2 text-left text-xs leading-relaxed text-slate-500">
                     <Icon name="lock" size={14} className="mt-0.5 shrink-0" />
                     Be open about it: let the people you are talking to know you are using a translation app.

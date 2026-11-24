@@ -16,21 +16,24 @@ const T0 = Date.UTC(2026, 10, 24, 18, 0, 0); // 2026-11-24 12:00 in Mexico City
 function setup(opts: Partial<Parameters<typeof createLedger>[0]> = {}) {
     let t = T0;
     const store = memoryStore();
-    const ledger = createLedger({ store, ownerEmails: ['boss@example.com'], log: silent, now: () => t, ...opts });
+    const ledger = createLedger({ store, ownerEmails: ['boss@example.com'], log: silent, now: () => t, requireAdult: false, ...opts });
     return { store, ledger, advance: (ms: number) => { t += ms; }, now: () => t };
 }
 const alice = { uid: 'alice', email: 'alice@example.com', emailVerified: true };
 const boss = { uid: 'boss', email: 'boss@example.com', emailVerified: true };
 
 describe('plans', () => {
-    it('keep every paid plan profitable even if the user spends every minute', () => {
-        for (const plan of PAID_PLANS) for (const interval of ['month', 'year'] as const) {
-            expect(worstCaseCostShare(plan, interval)).toBeLessThan(0.8);
+    it('keep every paid plan profitable even if the user spends every minute, by card or OXXO', () => {
+        for (const plan of PAID_PLANS) for (const interval of ['month', 'year'] as const) for (const method of ['card', 'oxxo'] as const) {
+            expect(worstCaseCostShare(plan, interval, 19, method)).toBeLessThan(0.8);
         }
     });
 
     it('computes what reaches the owner after IVA and Stripe fees', () => {
         expect(netRevenueMxn(199)).toBeCloseTo(159.76, 1);
+        // OXXO: 4% + 3 MXN, plus IVA on the fee
+        expect(netRevenueMxn(199, 'oxxo')).toBeCloseTo(199 - (199 - 199 / 1.16) - (199 * 0.04 + 3) * 1.16, 6);
+        expect(netRevenueMxn(199, 'oxxo')).toBeLessThan(netRevenueMxn(199));
     });
 
     it('prices text calls from Gemini token counts', () => {
@@ -174,7 +177,60 @@ describe('ledger', () => {
     it('caps what free users together may cost per month', async () => {
         const { ledger } = setup({ freeBudgetUsd: 0.2, floatUsd: 50 });
         await ledger.chargeText(alice, 0.2);
-        expect(await ledger.checkText({ uid: 'carol' })).toMatchObject({ ok: false, reason: 'paused' });
+        expect(await ledger.checkText({ uid: 'carol' })).toMatchObject({ ok: false, reason: 'full' });
+    });
+
+    it('caps free voice time handed out, even if a client hides how long it talked', async () => {
+        const { ledger } = setup({ freeBudgetUsd: 0.4, floatUsd: 50 }); // up to $1.20 of free voice leases a month
+        let granted = 0;
+        for (let i = 0; i < 10; i++) {
+            const caller = { uid: `u${i}` };
+            const g: any = await ledger.reserveLive(caller, 'talk'); // 5 free minutes = $0.35 each
+            if (!g.ok) { expect(g.reason).toBe('full'); break; }
+            granted++;
+            await ledger.settleLive(caller, g.leaseId); // "ended after 5 seconds"
+        }
+        expect(granted).toBe(4);
+        expect((await ledger.report()).thisMonth.voiceLeasedUsd).toBeCloseTo(1.4, 6);
+    });
+
+    it('keeps AI off until the user confirms they are 18 or older', async () => {
+        const { ledger } = setup({ requireAdult: true });
+        expect(await ledger.checkText(alice)).toMatchObject({ ok: false, reason: 'age' });
+        expect(await ledger.reserveLive(alice, 'talk')).toMatchObject({ ok: false, reason: 'age' });
+        expect((await ledger.status(alice)).adult).toBe(false);
+        expect((await ledger.checkText(boss)).ok).toBe(true); // the owner is not asked
+        await ledger.confirmAdult(alice);
+        expect((await ledger.status(alice)).adult).toBe(true);
+        expect((await ledger.checkText(alice)).ok).toBe(true);
+    });
+
+    it('gives a paid-once plan, adds more time on top, applies each payment once and ends without grace', async () => {
+        const { ledger, advance } = setup();
+        expect(await ledger.applyPass('alice', 'plus', 'month', 'cs_1')).toBe(true);
+        expect(await ledger.applyPass('alice', 'plus', 'month', 'cs_1')).toBe(false);
+        const s = await ledger.status(alice);
+        expect(s).toMatchObject({ plan: 'plus', minutesLeft: 80, subscription: null, pass: { plan: 'plus', periodEnd: Date.UTC(2026, 11, 24, 18) } });
+        await ledger.applyPass('alice', 'plus', 'month', 'cs_2');
+        expect((await ledger.status(alice)).pass!.periodEnd).toBe(Date.UTC(2027, 0, 24, 18));
+        await ledger.chargeText(alice, MINUTE_USD * 30);
+        advance(40 * DAY); // second month: minutes refilled
+        expect((await ledger.status(alice))).toMatchObject({ plan: 'plus', minutesLeft: 80 });
+        advance(25 * DAY);
+        expect((await ledger.status(alice)).plan).toBe('free');
+    });
+
+    it('uses the best live plan and ignores a subscription that has not started yet', async () => {
+        const { ledger } = setup();
+        await ledger.applyPass('alice', 'plus', 'month', 'cs_1');
+        const waiting = { plan: 'pro' as const, interval: 'month' as const, status: 'trialing', periodStart: T0, periodEnd: T0 + 30 * DAY, subscriptionId: 'sub_new' };
+        await ledger.applySubscription('alice', waiting);
+        const s = await ledger.status(alice);
+        expect(s.plan).toBe('plus');
+        expect(s.upcoming).toMatchObject({ plan: 'pro', startsAt: T0 + 30 * DAY });
+        expect((await ledger.coverage('alice')).renewing).not.toBeNull();
+        await ledger.applySubscription('alice', { ...waiting, status: 'active' });
+        expect((await ledger.status(alice)).plan).toBe('pro');
     });
 });
 
@@ -201,6 +257,28 @@ describe('stripe', () => {
             items: { data: [{ current_period_start: 100, current_period_end: 200, price: { recurring: { interval: 'year' } } }] } };
         expect(subscriptionFrom(sub)).toEqual({ uid: 'alice', customerId: 'cus_1', subscription: expect.objectContaining({ plan: 'plus', interval: 'year', periodStart: 100_000, periodEnd: 200_000 }) });
         expect(subscriptionFrom({ ...sub, current_period_start: 1, current_period_end: 2 }).subscription!.periodEnd).toBe(2000);
+    });
+
+    it('pays once by card now, or by OXXO when the store payment is confirmed', async () => {
+        const { ledger } = setup();
+        const session = (over: object = {}) => ({
+            id: 'cs_1', mode: 'payment', client_reference_id: 'alice', currency: 'mxn', amount_total: 19900,
+            metadata: { uid: 'alice', plan: 'plus', interval: 'month', kind: 'pass' }, payment_status: 'unpaid', ...over,
+        });
+        expect(await handleStripeEvent({ type: 'checkout.session.completed', data: { object: session() } }, ledger)).toMatch(/waiting/);
+        expect((await ledger.status(alice)).plan).toBe('free');
+        await handleStripeEvent({ id: 'evt_a', type: 'checkout.session.async_payment_succeeded', data: { object: session() } }, ledger);
+        await handleStripeEvent({ id: 'evt_b', type: 'checkout.session.async_payment_succeeded', data: { object: session() } }, ledger); // retried
+        expect((await ledger.status(alice)).pass!.periodEnd).toBe(Date.UTC(2026, 11, 24, 18));
+        let report = await ledger.report();
+        expect(report.allTime.revenueGrossMxn).toBe(199);
+        expect(report.allTime.revenueNetMxn).toBeCloseTo(netRevenueMxn(199, 'oxxo'), 6);
+
+        await handleStripeEvent({ type: 'checkout.session.completed', data: { object: session({ id: 'cs_2', payment_status: 'paid' }) } }, ledger);
+        expect((await ledger.status(alice)).pass!.periodEnd).toBe(Date.UTC(2027, 0, 24, 18));
+        report = await ledger.report();
+        expect(report.allTime.revenueNetMxn).toBeCloseTo(netRevenueMxn(199, 'oxxo') + netRevenueMxn(199, 'card'), 6);
+        expect(await handleStripeEvent({ type: 'checkout.session.completed', data: { object: session({ id: 'cs_3', payment_status: 'paid', metadata: {} }) } }, ledger)).toMatch(/ignored/);
     });
 
     it('turns Stripe events into plans and revenue', async () => {
@@ -251,6 +329,16 @@ describe('/api/live-token with billing', () => {
         expect((await out.json()).error.reason).toBe('quota');
     });
 
+    it('asks for the age check with a 403 before any voice time is reserved', async () => {
+        const { ledger, now } = setup({ requireAdult: true });
+        const upstream = vi.fn();
+        const handle = createLiveTokenHandler({ apiKey: 'k', projectId: 'p', fetchImpl: upstream, verifyToken: goodToken, log: silent, billing: ledger, now });
+        const res = await handle(post('/api/live-token', { purpose: 'talk' }));
+        expect(res.status).toBe(403);
+        expect((await res.json()).error.reason).toBe('age');
+        expect(upstream).not.toHaveBeenCalled();
+    });
+
     it('gives the time back if Gemini fails to mint the token', async () => {
         const { ledger, now } = setup();
         const upstream = vi.fn().mockResolvedValue(new Response('{"error":{"message":"busy"}}', { status: 503 }));
@@ -275,6 +363,16 @@ describe('/api/generate and /api/stream with billing', () => {
         const res = await handle(post('/api/generate', body));
         expect(res.status).toBe(402);
         expect(upstream).toHaveBeenCalledTimes(1);
+    });
+
+    it('turns a Gemini billing refusal (Prepay credit used up) into a pause, not the user paywall', async () => {
+        const { ledger } = setup();
+        const errors: string[] = [];
+        const upstream = vi.fn().mockResolvedValue(new Response('{"error":{"message":"Prepayment credits are depleted"}}', { status: 402 }));
+        const handle = createGenaiHandler({ apiKey: 'k', projectId: 'p', fetchImpl: upstream, verifyToken: goodToken, log: { warn: () => undefined, error: (m: string) => errors.push(m) }, billing: ledger });
+        const res = await handle(post('/api/generate', { model: 'gemini-3.8-flash', contents: [{ role: 'user', parts: [{ text: 'hi' }] }] }));
+        expect(res.status).toBe(503);
+        expect(errors.join(' ')).toMatch(/GEMINI BILLING/);
     });
 
     it('meters streams from their last usageMetadata without changing the bytes', async () => {
@@ -318,6 +416,53 @@ describe('/api/billing', () => {
         expect((await handle(post('/api/billing/checkout', { plan: 'plus', interval: 'month' }, 'guest'))).status).toBe(403);
         expect((await handle(post('/api/billing/checkout', { plan: 'gold', interval: 'month' }))).status).toBe(400);
         expect((await handle(post('/api/billing/portal', {}))).status).toBe(404);
+    });
+
+    it('offers paying once by card or OXXO, and falls back to card if OXXO is off', async () => {
+        const { ledger } = setup();
+        let oxxoOn = true;
+        const fetchImpl = vi.fn().mockImplementation(async (_url: string, init: any) => {
+            if (!oxxoOn && decodeURIComponent(init.body).includes('=oxxo')) {
+                return new Response(JSON.stringify({ error: { message: 'The payment method type "oxxo" is invalid.' } }), { status: 400 });
+            }
+            return new Response(JSON.stringify({ url: 'https://checkout.stripe.com/c/2' }), { status: 200 });
+        });
+        const handle = createBillingHandler({ apiKey: '', projectId: 'p', verifyToken: goodToken, log: silent, ledger, fetchImpl, stripeSecretKey: 'sk', stripeWebhookSecret: 'whsec_test' });
+        expect(await (await handle(post('/api/billing/checkout', { plan: 'plus', interval: 'month', once: true }))).json()).toEqual({ url: 'https://checkout.stripe.com/c/2' });
+        const form = decodeURIComponent(fetchImpl.mock.calls[0][1].body);
+        expect(form).toContain('mode=payment');
+        expect(form).toContain('payment_method_types[0]=card&payment_method_types[1]=oxxo');
+        expect(form).toContain('line_items[0][price_data][unit_amount]=19900');
+        expect(form).not.toContain('recurring');
+        expect(form).toContain('metadata[kind]=pass');
+        expect(form).toContain('success_url=https://glossos.example/?checkout=pass');
+
+        oxxoOn = false;
+        expect((await handle(post('/api/billing/checkout', { plan: 'pro', interval: 'year', once: true }))).status).toBe(200);
+        const retry = decodeURIComponent(fetchImpl.mock.calls[2][1].body);
+        expect(retry).toContain('payment_method_types[0]=card');
+        expect(retry).not.toContain('oxxo');
+    });
+
+    it('never charges twice: one renewing subscription, and a new one waits for paid time to run out', async () => {
+        const { ledger, now } = setup();
+        const fetchImpl = stripeOk();
+        const handle = createBillingHandler({ apiKey: '', projectId: 'p', verifyToken: goodToken, log: silent, ledger, fetchImpl, stripeSecretKey: 'sk', stripeWebhookSecret: 'whsec_test', now });
+        await ledger.applyPass('alice', 'pro', 'month', 'cs_1');
+        expect((await handle(post('/api/billing/checkout', { plan: 'plus', interval: 'month' }))).status).toBe(200);
+        expect(decodeURIComponent(fetchImpl.mock.calls[0][1].body)).toContain(`subscription_data[trial_end]=${Math.floor(Date.UTC(2026, 11, 24, 18) / 1000)}`);
+
+        await ledger.applySubscription('alice', { plan: 'plus', interval: 'month', status: 'active', periodStart: T0, periodEnd: T0 + 30 * DAY, subscriptionId: 'sub_1' });
+        expect((await handle(post('/api/billing/checkout', { plan: 'pro', interval: 'month' }))).status).toBe(409);
+        expect((await handle(post('/api/billing/checkout', { plan: 'pro', interval: 'month', once: true }))).status).toBe(409);
+    });
+
+    it('records the 18+ confirmation on the account', async () => {
+        const { ledger } = setup({ requireAdult: true });
+        const handle = createBillingHandler({ apiKey: '', projectId: 'p', verifyToken: goodToken, log: silent, ledger });
+        expect(await (await handle(post('/api/billing/status', {}))).json()).toMatchObject({ adult: false });
+        expect((await handle(post('/api/billing/adult', {}))).status).toBe(400);
+        expect(await (await handle(post('/api/billing/adult', { confirm: true }))).json()).toMatchObject({ adult: true });
     });
 
     it('accepts only signed webhooks and applies them', async () => {

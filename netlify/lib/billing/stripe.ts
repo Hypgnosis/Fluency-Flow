@@ -1,11 +1,12 @@
 /**
- * Stripe for Glossos, with no SDK: Checkout for subscriptions, the customer portal, and webhook
- * signature checks. Prices come from services/billing/plans.ts (sent as price_data), so nothing
- * has to be created in the Stripe dashboard first.
+ * Stripe for Glossos, with no SDK: Checkout for subscriptions and for paying once (card or cash at
+ * OXXO), the customer portal, and webhook signature checks. Prices come from
+ * services/billing/plans.ts (sent as price_data), so nothing has to be created in the Stripe
+ * dashboard first. OXXO must be turned on under Settings > Payment methods.
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { PLANS, isPaidPlan, isInterval, type PaidPlanId, type BillingInterval } from '../../../services/billing/plans.ts';
+import { PLANS, isPaidPlan, isInterval, type PaidPlanId, type BillingInterval, type PaymentMethod } from '../../../services/billing/plans.ts';
 import type { Ledger, Subscription } from './ledger.ts';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
@@ -48,8 +49,11 @@ export function createStripeClient(secretKey: string, fetchImpl: typeof fetch = 
     }
 
     return {
-        /** A Checkout page for a plan. Returns its URL. */
-        async checkout(opts: { uid: string; plan: PaidPlanId; interval: BillingInterval; origin: string; customerId?: string; email?: string }): Promise<string> {
+        /**
+         * A Checkout page for a subscription. Returns its URL. `trialEnd` (unix seconds) delays the
+         * first charge until a plan the user already paid for runs out.
+         */
+        async checkout(opts: { uid: string; plan: PaidPlanId; interval: BillingInterval; origin: string; customerId?: string; email?: string; trialEnd?: number }): Promise<string> {
             const plan = PLANS[opts.plan];
             const meta = { uid: opts.uid, plan: opts.plan, interval: opts.interval };
             const session = await call('POST', '/checkout/sessions', {
@@ -66,7 +70,7 @@ export function createStripeClient(secretKey: string, fetchImpl: typeof fetch = 
                     },
                 }],
                 metadata: meta,
-                subscription_data: { metadata: meta },
+                subscription_data: { metadata: meta, ...(opts.trialEnd ? { trial_end: opts.trialEnd } : {}) },
                 allow_promotion_codes: 'true',
                 success_url: `${opts.origin}/?checkout=success`,
                 cancel_url: `${opts.origin}/?checkout=cancel`,
@@ -75,7 +79,45 @@ export function createStripeClient(secretKey: string, fetchImpl: typeof fetch = 
             return session.url;
         },
 
-        /** The Stripe customer portal (change plan, card, cancel). Returns its URL. */
+        /**
+         * A Checkout page to pay once for a month or a year, by card or with an OXXO cash voucher.
+         * Falls back to card only if OXXO is not turned on in the Stripe account. Returns its URL.
+         */
+        async payOnce(opts: { uid: string; plan: PaidPlanId; interval: BillingInterval; origin: string; customerId?: string; email?: string }): Promise<string> {
+            const plan = PLANS[opts.plan];
+            const meta = { uid: opts.uid, plan: opts.plan, interval: opts.interval, kind: 'pass' };
+            const length = opts.interval === 'year' ? '1 year' : '1 month';
+            const params = (methods: string[]) => ({
+                mode: 'payment',
+                client_reference_id: opts.uid,
+                ...(opts.customerId ? { customer: opts.customerId } : opts.email ? { customer_email: opts.email } : {}),
+                payment_method_types: methods,
+                ...(methods.includes('oxxo') ? { payment_method_options: { oxxo: { expires_after_days: 3 } } } : {}),
+                line_items: [{
+                    quantity: 1,
+                    price_data: {
+                        currency: 'mxn',
+                        unit_amount: Math.round(plan.price![opts.interval] * 100),
+                        product_data: { name: `Glossos ${plan.name}, ${length}`, description: `${plan.minutes} AI minutes every month. Does not renew.` },
+                    },
+                }],
+                metadata: meta,
+                payment_intent_data: { metadata: meta },
+                success_url: `${opts.origin}/?checkout=pass`,
+                cancel_url: `${opts.origin}/?checkout=cancel`,
+            });
+            let session: any;
+            try {
+                session = await call('POST', '/checkout/sessions', params(['card', 'oxxo']));
+            } catch (err) {
+                if (!(err instanceof StripeError) || err.status !== 400 || !/oxxo/i.test(err.message)) throw err;
+                session = await call('POST', '/checkout/sessions', params(['card']));
+            }
+            if (!session.url) throw new StripeError('Stripe did not return a checkout page', 502);
+            return session.url;
+        },
+
+        /** The Stripe customer portal (change card, cancel). Returns its URL. */
         async portal(customerId: string, returnUrl: string): Promise<string> {
             const session = await call('POST', '/billing_portal/sessions', { customer: customerId, return_url: returnUrl });
             return session.url;
@@ -126,6 +168,17 @@ export function subscriptionFrom(sub: any): { uid?: string; customerId?: string;
     };
 }
 
+/** Gives the plan for a paid-once Checkout session and counts the money (both only once). */
+async function grantPass(session: any, method: PaymentMethod, ledger: Ledger): Promise<string> {
+    const meta = session?.metadata ?? {};
+    const uid = session?.client_reference_id || meta.uid;
+    if (meta.kind !== 'pass' || !uid || !isPaidPlan(meta.plan) || !isInterval(meta.interval)) return 'payment without a Glossos plan ignored';
+    if (String(session.currency).toLowerCase() !== 'mxn' || !(session.amount_total > 0)) return 'payment without an MXN amount ignored';
+    const added = await ledger.applyPass(uid, meta.plan, meta.interval, String(session.id));
+    await ledger.recordRevenue(`pass:${session.id}`, session.amount_total / 100, method);
+    return added ? `${meta.plan} for 1 ${meta.interval} paid by ${method}` : 'payment already applied';
+}
+
 /** Applies one verified Stripe event to the ledger. Returns a short note for the logs. */
 export async function handleStripeEvent(event: any, ledger: Ledger): Promise<string> {
     const obj = event?.data?.object;
@@ -134,8 +187,16 @@ export async function handleStripeEvent(event: any, ledger: Ledger): Promise<str
             const uid = obj?.client_reference_id || obj?.metadata?.uid;
             const customerId = typeof obj?.customer === 'string' ? obj.customer : obj?.customer?.id;
             if (uid && customerId) await ledger.applySubscription(uid, null, customerId);
+            if (obj?.mode === 'payment') {
+                // Cards are paid now; an OXXO voucher is paid later at the store (async_payment_succeeded).
+                return obj.payment_status === 'paid' ? grantPass(obj, 'card', ledger) : 'waiting for the OXXO payment';
+            }
             return `checkout completed for ${uid ? 'user' : 'unknown user'}`;
         }
+        case 'checkout.session.async_payment_succeeded':
+            return grantPass(obj, 'oxxo', ledger);
+        case 'checkout.session.async_payment_failed':
+            return 'OXXO voucher expired without payment';
         case 'customer.subscription.created':
         case 'customer.subscription.updated':
         case 'customer.subscription.deleted': {
